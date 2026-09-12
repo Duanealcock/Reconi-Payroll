@@ -1,0 +1,1234 @@
+<title>Reconi Payroll</title>
+<style>
+:root{
+  --navy-950:#0f1626;
+  --navy-900:#151d30;
+  --navy-850:#1a2338;
+  --navy-800:#212b45;
+  --navy-border:#2a3450;
+  --gold:#caa042;
+  --gold-light:#e0bb63;
+  --bg:#eef1f5;
+  --card:#ffffff;
+  --text:#1e2433;
+  --text-soft:#5b6472;
+  --text-faint:#8891a0;
+  --green:#1f9d55;
+  --green-bg:#e8f7ee;
+  --red:#c0392b;
+  --border:#e5e8ee;
+  --sidebar-w:230px;
+  color-scheme: light;
+}
+*{box-sizing:border-box;}
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  font-size:14px;
+  -webkit-font-smoothing:antialiased;
+}
+a{color:inherit;text-decoration:none;}
+button{font-family:inherit;}
+
+.app{display:flex;min-height:100vh;}
+
+/* ---------- Sidebar ---------- */
+.sidebar{
+  width:var(--sidebar-w);
+  flex-shrink:0;
+  background:var(--navy-950);
+  color:#c7cddb;
+  display:flex;
+  flex-direction:column;
+  padding:18px 14px 14px;
+  position:fixed;
+  top:0;left:0;bottom:0;
+  overflow-y:auto;
+  z-index:40;
+  transition:transform .2s ease;
+}
+.brand{display:flex;align-items:center;gap:10px;padding:2px 6px 14px;}
+.brand svg{flex-shrink:0;}
+.brand-text .name{font-weight:700;color:#fff;font-size:16px;letter-spacing:.5px;line-height:1.1;}
+.brand-text .sub{font-size:9.5px;color:var(--gold-light);letter-spacing:1.5px;font-weight:600;}
+
+.company-switch{position:relative;margin-bottom:16px;}
+.company-pill{
+  width:100%;
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  background:var(--navy-850);
+  border:1px solid var(--navy-border);
+  color:#fff;
+  padding:9px 10px;
+  border-radius:8px;
+  cursor:pointer;
+  font-size:12.5px;
+  font-weight:600;
+}
+.company-pill span.name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.company-pill .badge{
+  background:var(--gold);
+  color:#241a05;
+  font-size:10.5px;
+  font-weight:700;
+  padding:1px 6px;
+  border-radius:20px;
+  flex-shrink:0;
+}
+.company-menu{
+  display:none;
+  position:absolute;top:100%;left:0;right:0;margin-top:6px;
+  background:var(--navy-850);border:1px solid var(--navy-border);
+  border-radius:8px;padding:6px;z-index:50;
+  max-height:260px;overflow-y:auto;
+  box-shadow:0 12px 28px rgba(0,0,0,.4);
+}
+.company-menu.open{display:block;}
+.company-menu-item{
+  padding:8px 9px;border-radius:6px;cursor:pointer;font-size:12.5px;
+  display:flex;justify-content:space-between;gap:8px;color:#dfe3ec;
+}
+.company-menu-item:hover{background:var(--navy-800);}
+.company-menu-item.active{color:var(--gold-light);font-weight:600;}
+.company-menu-add{
+  margin-top:4px;padding:8px 9px;border-radius:6px;font-size:12.5px;
+  color:var(--gold-light);cursor:pointer;font-weight:600;border-top:1px solid var(--navy-border);
+}
+.company-menu-add:hover{background:var(--navy-800);}
+
+.nav-group{margin-bottom:14px;}
+.nav-label{
+  font-size:10px;letter-spacing:1.3px;color:var(--text-faint);
+  font-weight:700;padding:0 10px 6px;
+}
+.nav-item{
+  display:flex;align-items:center;gap:10px;
+  padding:8px 10px;border-radius:7px;margin-bottom:2px;
+  font-size:13px;font-weight:500;color:#c7cddb;cursor:pointer;
+  border-left:3px solid transparent;
+}
+.nav-item svg{flex-shrink:0;opacity:.85;}
+.nav-item:hover{background:var(--navy-850);color:#fff;}
+.nav-item.active{background:var(--navy-800);color:#fff;border-left-color:var(--gold);}
+.nav-item.active svg{opacity:1;color:var(--gold-light);}
+
+.sidebar-footer{
+  margin-top:auto;padding-top:12px;border-top:1px solid var(--navy-border);
+  font-size:11px;color:var(--text-faint);
+}
+.sidebar-footer .sync{display:flex;align-items:center;gap:6px;margin-bottom:8px;}
+.sidebar-footer .dot{width:6px;height:6px;border-radius:50%;background:#3ec97a;display:inline-block;}
+.sidebar-footer .email{color:#9aa2b2;word-break:break-all;}
+.sidebar-footer .role{color:#77839a;}
+.sidebar-footer .signout{color:var(--gold-light);font-weight:600;cursor:pointer;}
+
+.menu-toggle{display:none;}
+
+/* ---------- Main content ---------- */
+.content{
+  margin-left:var(--sidebar-w);
+  flex:1;
+  min-width:0;
+  padding:22px 26px 60px;
+}
+.topbar{
+  display:flex;justify-content:space-between;align-items:flex-start;
+  margin-bottom:18px;flex-wrap:wrap;gap:10px;
+}
+.topbar h1{font-size:20px;margin:0 0 2px;color:var(--text);}
+.topbar .subtitle{font-size:12.5px;color:var(--text-soft);}
+.topbar-right{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+
+select, input, textarea{
+  font-family:inherit;font-size:13px;padding:7px 10px;border-radius:7px;
+  border:1px solid var(--border);background:#fff;color:var(--text);
+}
+select:focus, input:focus, textarea:focus{outline:2px solid #d9c690;}
+
+.btn{
+  border:1px solid var(--border);background:#fff;color:var(--text);
+  padding:8px 14px;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;
+}
+.btn:hover{background:#f6f7f9;}
+.btn-primary{background:var(--navy-950);color:#fff;border-color:var(--navy-950);}
+.btn-primary:hover{background:var(--navy-850);}
+.btn-gold{background:var(--gold);color:#241a05;border-color:var(--gold);}
+.btn-gold:hover{background:var(--gold-light);}
+.btn-danger{color:var(--red);border-color:#f0c6c0;}
+.btn-danger:hover{background:#fdf1ef;}
+.btn-sm{padding:5px 10px;font-size:12px;}
+.btn[disabled]{opacity:.5;cursor:not-allowed;}
+
+.label-caps{font-size:10.5px;letter-spacing:1px;color:var(--text-faint);font-weight:700;}
+
+/* stat cards */
+.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:16px;}
+.card{background:var(--card);border:1px solid var(--border);border-radius:11px;padding:16px;box-shadow:0 1px 2px rgba(20,25,40,.03);}
+.stat-value{font-size:22px;font-weight:700;margin:6px 0 2px;color:var(--text);}
+.stat-caption{font-size:11.5px;color:var(--text-soft);}
+
+.two-col{display:grid;grid-template-columns:1.5fr 1fr;gap:14px;}
+.card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;}
+.card-title{font-weight:700;font-size:13.5px;}
+
+table{width:100%;border-collapse:collapse;font-size:13px;}
+th{
+  text-align:left;font-size:10.5px;letter-spacing:.6px;color:var(--text-faint);
+  font-weight:700;padding:8px 10px;border-bottom:1px solid var(--border);
+}
+td{padding:10px;border-bottom:1px solid var(--border);color:var(--text);}
+tr:last-child td{border-bottom:none;}
+.table-wrap{overflow-x:auto;}
+.empty-row{color:var(--text-faint);text-align:center;padding:24px;font-size:13px;}
+
+.pill-status{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:20px;font-size:11.5px;font-weight:700;}
+.pill-green{background:var(--green-bg);color:var(--green);}
+.pill-gray{background:#eef0f4;color:var(--text-soft);}
+.pill-gold{background:#faf1de;color:#9c7524;}
+
+.integrity-box{background:var(--green-bg);color:var(--green);border-radius:8px;padding:8px 12px;font-weight:700;font-size:12.5px;display:inline-flex;align-items:center;gap:6px;margin-bottom:12px;}
+.integrity-warn{background:#fdf3e3;color:#9c6a15;}
+.check-list{font-size:12.5px;color:var(--text-soft);line-height:1.9;}
+.check-list b{color:var(--text);}
+
+.page-actions{display:flex;gap:8px;flex-wrap:wrap;}
+
+/* modal */
+.modal-overlay{
+  position:fixed;inset:0;background:rgba(15,20,35,.45);z-index:100;
+  display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;overflow-y:auto;
+}
+.modal{
+  background:#fff;border-radius:12px;max-width:640px;width:100%;padding:22px 24px;
+  box-shadow:0 20px 50px rgba(0,0,0,.25);
+}
+.modal h2{margin:0 0 14px;font-size:17px;}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+.form-field{display:flex;flex-direction:column;gap:4px;margin-bottom:2px;}
+.form-field label{font-size:11.5px;font-weight:700;color:var(--text-soft);}
+.form-field.span2{grid-column:span 2;}
+.modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px;}
+
+.section-title{font-size:15px;font-weight:700;margin:22px 0 10px;}
+.section-title:first-child{margin-top:0;}
+
+.helptext{font-size:11.5px;color:var(--text-faint);margin-top:-6px;margin-bottom:10px;}
+
+.payslip{border:1px solid var(--border);border-radius:10px;padding:22px;background:#fff;}
+.payslip-head{display:flex;justify-content:space-between;border-bottom:2px solid var(--navy-950);padding-bottom:14px;margin-bottom:14px;}
+.payslip-head h2{margin:0;font-size:18px;}
+.payslip-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:16px;font-size:12.5px;}
+.payslip-grid div div{margin-bottom:3px;}
+.payslip-table th{background:#f7f8fa;}
+.net-row td{font-weight:700;font-size:14px;border-top:2px solid var(--navy-950);}
+
+.link-btn{color:#2454a8;font-weight:600;cursor:pointer;font-size:12.5px;}
+.link-btn:hover{text-decoration:underline;}
+
+.disclaimer{font-size:11px;color:var(--text-faint);margin-top:18px;border-top:1px dashed var(--border);padding-top:10px;line-height:1.6;}
+
+@media (max-width:880px){
+  .sidebar{transform:translateX(-100%);width:250px;}
+  .sidebar.open{transform:translateX(0);}
+  .content{margin-left:0;padding:16px;}
+  .menu-toggle{
+    display:flex;align-items:center;gap:8px;background:var(--navy-950);color:#fff;
+    padding:10px 12px;border-radius:8px;border:none;font-weight:700;font-size:13px;
+    margin-bottom:14px;cursor:pointer;
+  }
+  .stat-grid{grid-template-columns:1fr 1fr;}
+  .two-col{grid-template-columns:1fr;}
+  .form-grid{grid-template-columns:1fr;}
+  .form-field.span2{grid-column:span 1;}
+  .sidebar-scrim{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:35;}
+  .sidebar-scrim.open{display:block;}
+}
+@media (max-width:520px){
+  .stat-grid{grid-template-columns:1fr;}
+  .payslip-grid{grid-template-columns:1fr;}
+}
+</style>
+
+<div class="app">
+  <div class="sidebar-scrim" id="scrim"></div>
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <svg width="30" height="30" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <polygon points="20,4 36,34 4,34" fill="none" stroke="#caa042" stroke-width="3" stroke-linejoin="round"/>
+        <polygon points="20,17 27.5,34 12.5,34" fill="#caa042"/>
+      </svg>
+      <div class="brand-text">
+        <div class="name">RECONI</div>
+        <div class="sub">PAYROLL</div>
+      </div>
+    </div>
+
+    <div class="company-switch">
+      <div class="company-pill" id="companyPill">
+        <span class="name" id="companyPillName">Loading…</span>
+        <span class="badge" id="companyPillBadge">0</span>
+      </div>
+      <div class="company-menu" id="companyMenu"></div>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-label">OVERVIEW</div>
+      <div class="nav-item" data-route="dashboard">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="5" rx="1.5"/><rect x="13" y="11" width="8" height="10" rx="1.5"/><rect x="3" y="14" width="8" height="7" rx="1.5"/></svg>
+        Dashboard
+      </div>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-label">DIRECTORY</div>
+      <div class="nav-item" data-route="employees">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.4"/><path d="M4 20c1.5-4.2 5-6 8-6s6.5 1.8 8 6"/></svg>
+        Employees
+      </div>
+      <div class="nav-item" data-route="former">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="8" r="3.2"/><path d="M3 20c1.3-3.8 4.4-5.5 7-5.5"/><path d="M16 8h6M16 8l2-2M16 8l2 2"/></svg>
+        Former Employees
+      </div>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-label">PAYROLL</div>
+      <div class="nav-item" data-route="payruns">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18"/><path d="M8 2v4M16 2v4"/></svg>
+        Pay Runs
+      </div>
+      <div class="nav-item" data-route="payslips">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 2h9l4 4v16H6z"/><path d="M9 12h6M9 16h6M9 8h3"/></svg>
+        Payslips
+      </div>
+      <div class="nav-item" data-route="leave">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18"/><path d="m8 14 2 2 4-4"/></svg>
+        Leave &amp; Attendance
+      </div>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-label">RECORDS</div>
+      <div class="nav-item" data-route="company">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="3" width="16" height="18" rx="1.5"/><path d="M8 7h2M14 7h2M8 11h2M14 11h2M8 15h2M14 15h2"/></svg>
+        Company &amp; Statutory Info
+      </div>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-label">INSIGHTS</div>
+      <div class="nav-item" data-route="reports">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20V10M11 20V4M18 20v-7"/></svg>
+        Reports
+      </div>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="sync"><span class="dot" id="syncDot"></span><span id="syncText">Saved just now</span></div>
+      <div class="email">duane.alcock@outlook.com</div>
+      <div class="role">admin</div>
+      <div class="signout" style="margin-top:6px;">Sign out</div>
+    </div>
+  </aside>
+
+  <main class="content">
+    <button class="menu-toggle" id="menuToggle">☰ Menu</button>
+    <div id="page-root"></div>
+  </main>
+</div>
+<div id="modal-root"></div>
+
+<script>
+(function(){
+"use strict";
+
+/* ===================== Utilities ===================== */
+function uid(){ return 'id_' + Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
+function fmtZAR(n){
+  n = Number(n)||0;
+  var neg = n < 0; n = Math.abs(n);
+  var parts = n.toFixed(2).split('.');
+  parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  return (neg?'-':'') + 'R' + parts[0] + ',' + parts[1];
+}
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+function monthLabel(y,m){ return new Date(y, m-1, 1).toLocaleDateString('en-ZA',{month:'long',year:'numeric'}); }
+function ageFromDOB(dob){
+  if(!dob) return null;
+  var d = new Date(dob), t = new Date();
+  var age = t.getFullYear()-d.getFullYear();
+  var m = t.getMonth()-d.getMonth();
+  if(m<0 || (m===0 && t.getDate()<d.getDate())) age--;
+  return age;
+}
+function daysBetween(a,b){
+  return Math.round((new Date(b)-new Date(a))/86400000)+1;
+}
+function clientId(){ return 'anon_'+Math.random().toString(36).slice(2); }
+
+/* ===================== Tax engine (2026/2027 SARS tax year) ===================== */
+var TAX_BRACKETS = [
+  {min:0,        max:245100,   base:0,      rate:0.18},
+  {min:245100,   max:383100,   base:44118,  rate:0.26},
+  {min:383100,   max:530200,   base:79998,  rate:0.31},
+  {min:530200,   max:695800,   base:125599, rate:0.36},
+  {min:695800,   max:887000,   base:185215, rate:0.39},
+  {min:887000,   max:1878600,  base:259783, rate:0.41},
+  {min:1878600,  max:Infinity, base:666339, rate:0.45}
+];
+var REBATE_PRIMARY = 17820, REBATE_SECONDARY = 9765, REBATE_TERTIARY = 3249;
+var UIF_CEILING_MONTHLY = 17712, UIF_RATE = 0.01;
+var SDL_RATE = 0.01, SDL_ANNUAL_THRESHOLD = 500000;
+
+function annualTaxOn(taxableAnnual){
+  taxableAnnual = Math.max(0, taxableAnnual);
+  for(var i=0;i<TAX_BRACKETS.length;i++){
+    var b = TAX_BRACKETS[i];
+    if(taxableAnnual <= b.max){
+      return b.base + b.rate*(taxableAnnual - b.min);
+    }
+  }
+  return 0;
+}
+function medicalCreditMonthly(dependants){
+  dependants = Number(dependants)||0;
+  if(dependants<=0) return 0;
+  if(dependants===1) return 376;
+  return 752 + 254*(dependants-1);
+}
+function calcPayslipLine(emp, company){
+  var basic = emp.payFrequency==='hourly'
+    ? (Number(emp.hourlyRate)||0) * (Number(emp.standardHours)||160)
+    : (Number(emp.basicSalary)||0);
+  var travel = Number(emp.travelAllowance)||0;
+  var other = Number(emp.otherAllowance)||0;
+  var gross = basic + travel + other;
+  var annualGross = gross*12;
+  var retMonthly = Number(emp.retirementContribution)||0;
+  var retAnnualRaw = retMonthly*12;
+  var retAnnual = Math.min(retAnnualRaw, 0.275*annualGross);
+  var taxableAnnual = Math.max(0, annualGross - retAnnual);
+  var taxAnnual = annualTaxOn(taxableAnnual);
+  var age = ageFromDOB(emp.dob);
+  var rebate = REBATE_PRIMARY + (age!==null && age>=65?REBATE_SECONDARY:0) + (age!==null && age>=75?REBATE_TERTIARY:0);
+  var medCreditAnnual = medicalCreditMonthly(emp.medicalDependants)*12;
+  var taxPayableAnnual = Math.max(0, taxAnnual - rebate - medCreditAnnual);
+  var paye = Math.round(taxPayableAnnual/12);
+  var uifBase = Math.min(gross, UIF_CEILING_MONTHLY);
+  var uifEmployee = Math.round(uifBase*UIF_RATE*100)/100;
+  var uifEmployer = uifEmployee;
+  var sdlEmployer = company && company.sdlApplicable ? Math.round(gross*SDL_RATE*100)/100 : 0;
+  var medicalAidDed = Number(emp.medicalAidContribution)||0;
+  var otherDed = Number(emp.otherDeduction)||0;
+  var totalDeductions = paye + uifEmployee + retMonthly + medicalAidDed + otherDed;
+  var netPay = gross - totalDeductions;
+  var employerCost = gross + uifEmployer + sdlEmployer;
+  return {
+    employeeId: emp.id, employeeName: (emp.firstName+' '+emp.lastName).trim(),
+    basic: basic, travelAllowance: travel, otherAllowance: other, gross: gross,
+    retirementDeduction: retMonthly, medicalAidDeduction: medicalAidDed, otherDeduction: otherDed,
+    paye: paye, uifEmployee: uifEmployee, uifEmployer: uifEmployer, sdlEmployer: sdlEmployer,
+    medicalCreditMonthly: medicalCreditMonthly(emp.medicalDependants),
+    totalDeductions: totalDeductions, netPay: netPay, employerCost: employerCost
+  };
+}
+
+/* ===================== DB layer ===================== */
+var db = null;
+var dbReady = false;
+var state = {
+  companies: [],
+  employees: [],
+  payruns: [],
+  leave: [],
+  currentCompanyId: null,
+  route: 'dashboard',
+  routeParam: null
+};
+
+function saveLastCompany(id){
+  try{ localStorage.setItem('reconi_last_company', id); }catch(e){}
+}
+function loadLastCompany(){
+  try{ return localStorage.getItem('reconi_last_company'); }catch(e){ return null; }
+}
+
+function setSync(text, ok){
+  var dot = document.getElementById('syncDot');
+  var t = document.getElementById('syncText');
+  if(t) t.textContent = text;
+  if(dot) dot.style.background = ok===false ? '#e0a13c' : '#3ec97a';
+}
+
+function defaultCompany(name){
+  return {
+    id: uid(), name: name||'New Client Company (Pty) Ltd', regNo:'', payeRef:'', uifRef:'', sdlRef:'',
+    sdlApplicable:false, payDay:25, address:'',
+    defaultAnnualLeaveDays:15, defaultSickLeaveDays:10, defaultFamilyRespDays:3,
+    createdAt: Date.now()
+  };
+}
+
+async function initDb(){
+  try{
+    db = await claude.use('db');
+  }catch(e){ db = null; }
+  if(!db){
+    setSync('Offline — changes stay in this browser only', false);
+    loadLocalFallback();
+    finishBoot();
+    return;
+  }
+  try{
+    var companiesRes = await db.collection('companies').get();
+    var companies = (companiesRes && companiesRes.docs) || [];
+    if(!companies.length){
+      var seed = defaultCompany('Test Client (Pty) Ltd');
+      await db.doc('companies/'+seed.id).set(seed);
+      companies = [seed];
+    }
+    state.companies = companies;
+    var last = loadLastCompany();
+    state.currentCompanyId = (last && companies.some(function(c){return c.id===last;})) ? last : companies[0].id;
+
+    var empRes = await db.collection('employees').get();
+    state.employees = (empRes && empRes.docs) || [];
+    var prRes = await db.collection('payruns').get();
+    state.payruns = (prRes && prRes.docs) || [];
+    var lvRes = await db.collection('leave_requests').get();
+    state.leave = (lvRes && lvRes.docs) || [];
+
+    setSync('Saved just now', true);
+    dbReady = true;
+  }catch(e){
+    console.log('db init error', e);
+    setSync('Offline — changes stay in this browser only', false);
+    loadLocalFallback();
+  }
+  finishBoot();
+}
+
+function loadLocalFallback(){
+  try{
+    var raw = localStorage.getItem('reconi_fallback_data');
+    if(raw){
+      var data = JSON.parse(raw);
+      state.companies = data.companies||[];
+      state.employees = data.employees||[];
+      state.payruns = data.payruns||[];
+      state.leave = data.leave||[];
+    }
+  }catch(e){}
+  if(!state.companies.length){
+    state.companies = [defaultCompany('Test Client (Pty) Ltd')];
+  }
+  var last = loadLastCompany();
+  state.currentCompanyId = (last && state.companies.some(function(c){return c.id===last;})) ? last : state.companies[0].id;
+}
+function persistLocalFallback(){
+  try{
+    localStorage.setItem('reconi_fallback_data', JSON.stringify({
+      companies: state.companies, employees: state.employees, payruns: state.payruns, leave: state.leave
+    }));
+  }catch(e){}
+}
+
+/* Generic write helpers that work whether db is live or we fall back to localStorage */
+async function dbSet(collection, doc){
+  if(db){
+    try{
+      setSync('Saving…');
+      await db.doc(collection+'/'+doc.id).set(doc);
+      setSync('Saved just now', true);
+      return true;
+    }catch(e){ console.log('save error', e); setSync('Save failed — retry', false); return false; }
+  }else{
+    persistLocalFallback();
+    return true;
+  }
+}
+async function dbDelete(collection, id){
+  if(db){
+    try{
+      await db.doc(collection+'/'+id).delete();
+      return true;
+    }catch(e){ console.log('delete error', e); return false; }
+  }else{
+    persistLocalFallback();
+    return true;
+  }
+}
+
+function upsertLocal(arr, doc){
+  var idx = arr.findIndex(function(x){return x.id===doc.id;});
+  if(idx>=0) arr[idx] = doc; else arr.push(doc);
+}
+function removeLocal(arr, id){
+  var idx = arr.findIndex(function(x){return x.id===id;});
+  if(idx>=0) arr.splice(idx,1);
+}
+
+async function saveCompany(doc){ upsertLocal(state.companies, doc); await dbSet('companies', doc); }
+async function saveEmployee(doc){ upsertLocal(state.employees, doc); await dbSet('employees', doc); }
+async function savePayrun(doc){ upsertLocal(state.payruns, doc); await dbSet('payruns', doc); }
+async function saveLeave(doc){ upsertLocal(state.leave, doc); await dbSet('leave_requests', doc); }
+async function deleteLeave(id){ removeLocal(state.leave, id); await dbDelete('leave_requests', id); }
+
+/* ===================== Scoped getters ===================== */
+function currentCompany(){
+  return state.companies.find(function(c){return c.id===state.currentCompanyId;}) || state.companies[0];
+}
+function companyEmployees(status){
+  return state.employees.filter(function(e){
+    return e.companyId===state.currentCompanyId && (status?e.status===status:true);
+  });
+}
+function companyPayruns(){
+  return state.payruns.filter(function(p){return p.companyId===state.currentCompanyId;})
+    .sort(function(a,b){ return (b.periodYear-a.periodYear) || (b.periodMonth-a.periodMonth); });
+}
+function companyLeave(){
+  return state.leave.filter(function(l){return l.companyId===state.currentCompanyId;});
+}
+function employeeById(id){ return state.employees.find(function(e){return e.id===id;}); }
+
+function leaveTakenFor(employeeId, type){
+  return companyLeave().filter(function(l){return l.employeeId===employeeId && l.type===type;})
+    .reduce(function(sum,l){ return sum+(Number(l.days)||0); }, 0);
+}
+
+/* ===================== Router / Render ===================== */
+function navigate(route, param){
+  state.route = route; state.routeParam = param||null;
+  document.querySelectorAll('.nav-item').forEach(function(el){
+    el.classList.toggle('active', el.dataset.route===route);
+  });
+  closeSidebarMobile();
+  render();
+}
+function icon(check){
+  return check
+    ? '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#1f9d55" stroke-width="2.4"><path d="m5 13 4 4 10-11"/></svg>'
+    : '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#c0392b" stroke-width="2.4"><path d="M6 6l12 12M18 6 6 18"/></svg>';
+}
+
+function render(){
+  var root = document.getElementById('page-root');
+  var fn = {
+    dashboard: renderDashboard,
+    employees: renderEmployees,
+    former: renderFormer,
+    payruns: renderPayruns,
+    payslips: renderPayslips,
+    leave: renderLeave,
+    company: renderCompany,
+    reports: renderReports
+  }[state.route] || renderDashboard;
+  root.innerHTML = fn();
+  renderCompanySwitcher();
+  wireRouteEvents();
+}
+
+/* ---------- Company switcher ---------- */
+function renderCompanySwitcher(){
+  var c = currentCompany();
+  document.getElementById('companyPillName').textContent = c ? c.name : 'No company';
+  document.getElementById('companyPillBadge').textContent = companyEmployees('active').length;
+  var menu = document.getElementById('companyMenu');
+  var html = state.companies.map(function(co){
+    return '<div class="company-menu-item'+(co.id===state.currentCompanyId?' active':'')+'" data-cid="'+co.id+'">'
+      +'<span>'+esc(co.name)+'</span><span>'+state.employees.filter(function(e){return e.companyId===co.id && e.status==='active';}).length+'</span></div>';
+  }).join('');
+  html += '<div class="company-menu-add" id="addCompanyBtn">+ Add company</div>';
+  menu.innerHTML = html;
+}
+
+/* ---------- Dashboard ---------- */
+function renderDashboard(){
+  var active = companyEmployees('active');
+  var runs = companyPayruns();
+  var nextDraft = runs.find(function(r){return r.status==='draft';});
+  var finalized = runs.filter(function(r){return r.status==='finalized';});
+  var thisMonthCost = 0;
+  if(finalized[0]) thisMonthCost = finalized[0].totals.employerCost;
+  var ytdPaye = finalized.reduce(function(s,r){ return s + r.totals.paye; }, 0);
+
+  var missingBank = active.filter(function(e){return !e.accountNumber;}).length;
+  var missingTax = active.filter(function(e){return !e.taxNumber;}).length;
+  var missingUif = active.filter(function(e){return !e.uifNumber;}).length;
+  var allOk = !missingBank && !missingTax && !missingUif && active.length>0;
+
+  var recentRows = runs.slice(0,5).map(function(r){
+    return '<tr><td>'+esc(r.periodLabel)+'</td><td>'+r.lines.length+'</td><td>'+fmtZAR(r.totals.netPay)+'</td>'
+      +'<td>'+statusPill(r.status)+'</td>'
+      +'<td><span class="link-btn" data-open-run="'+r.id+'">View</span></td></tr>';
+  }).join('');
+
+  return ''
+  +'<div class="topbar"><div><h1>Dashboard</h1><div class="subtitle">'+esc(currentCompany()?currentCompany().name:'')+'</div></div></div>'
+  +'<div class="stat-grid">'
+    +statCard('ACTIVE EMPLOYEES', active.length, 'Currently on payroll')
+    +statCard('NEXT PAY RUN', nextDraft?esc(nextDraft.periodLabel):'None scheduled', nextDraft?'Draft — not yet finalized':'Create one in Pay Runs')
+    +statCard('THIS MONTH\'S PAYROLL COST', fmtZAR(thisMonthCost), 'Gross + employer UIF + SDL')
+    +statCard('YTD PAYE PAID OVER', fmtZAR(ytdPaye), 'Across finalized pay runs')
+  +'</div>'
+  +'<div class="two-col">'
+    +'<div class="card"><div class="card-header"><div class="card-title">Recent pay runs</div><span class="link-btn" data-route-link="payruns">View all</span></div>'
+      +'<div class="table-wrap"><table><thead><tr><th>Period</th><th>Employees</th><th>Net pay</th><th>Status</th><th></th></tr></thead><tbody>'
+      +(recentRows || '<tr><td colspan="5" class="empty-row">No pay runs yet — create one under Pay Runs.</td></tr>')
+      +'</tbody></table></div></div>'
+    +'<div class="card">'
+      +'<div class="card-title" style="margin-bottom:10px;">Payroll integrity</div>'
+      +'<div class="integrity-box'+(allOk?'':' integrity-warn')+'">'+(allOk?'●':'!')+' '+(allOk?'All checks passed':'Needs attention')+'</div>'
+      +'<div class="check-list">'
+        +'<div>'+icon(!missingTax)+' All active employees have a tax number <b>('+(active.length-missingTax)+'/'+active.length+')</b></div>'
+        +'<div>'+icon(!missingUif)+' All active employees have a UIF number <b>('+(active.length-missingUif)+'/'+active.length+')</b></div>'
+        +'<div>'+icon(!missingBank)+' All active employees have banking details <b>('+(active.length-missingBank)+'/'+active.length+')</b></div>'
+      +'</div>'
+    +'</div>'
+  +'</div>';
+}
+function statCard(label,value,caption){
+  return '<div class="card"><div class="label-caps">'+label+'</div><div class="stat-value">'+value+'</div><div class="stat-caption">'+caption+'</div></div>';
+}
+function statusPill(status){
+  if(status==='finalized') return '<span class="pill-status pill-green">● Finalized</span>';
+  if(status==='draft') return '<span class="pill-status pill-gold">● Draft</span>';
+  return '<span class="pill-status pill-gray">'+esc(status)+'</span>';
+}
+
+/* ---------- Employees ---------- */
+function renderEmployees(){
+  var list = companyEmployees('active');
+  var rows = list.map(function(e){
+    return '<tr><td><b>'+esc(e.firstName+' '+e.lastName)+'</b><div class="stat-caption">'+esc(e.position||'')+'</div></td>'
+    +'<td>'+esc(e.employeeNo||'—')+'</td>'
+    +'<td>'+(e.payFrequency==='hourly'?fmtZAR(e.hourlyRate)+'/hr':fmtZAR(e.basicSalary)+'/mo')+'</td>'
+    +'<td>'+esc(e.uifNumber||'—')+'</td>'
+    +'<td><span class="link-btn" data-edit-emp="'+e.id+'">Edit</span> &nbsp; <span class="link-btn" data-terminate-emp="'+e.id+'">Terminate</span></td></tr>';
+  }).join('');
+  return ''
+  +'<div class="topbar"><div><h1>Employees</h1><div class="subtitle">Active headcount for '+esc(currentCompany()?currentCompany().name:'')+'</div></div>'
+    +'<div class="topbar-right"><button class="btn btn-gold" id="addEmpBtn">+ Add employee</button></div></div>'
+  +'<div class="card"><div class="table-wrap"><table><thead><tr><th>Name</th><th>Employee no.</th><th>Pay</th><th>UIF no.</th><th></th></tr></thead><tbody>'
+  +(rows || '<tr><td colspan="5" class="empty-row">No active employees yet. Click "Add employee" to get started.</td></tr>')
+  +'</tbody></table></div></div>';
+}
+function renderFormer(){
+  var list = companyEmployees('terminated');
+  var rows = list.map(function(e){
+    return '<tr><td><b>'+esc(e.firstName+' '+e.lastName)+'</b></td><td>'+esc(e.position||'')+'</td>'
+    +'<td>'+esc(e.terminationDate||'—')+'</td><td>'+esc(e.terminationReason||'—')+'</td>'
+    +'<td><span class="link-btn" data-reinstate-emp="'+e.id+'">Reinstate</span></td></tr>';
+  }).join('');
+  return ''
+  +'<div class="topbar"><h1>Former Employees</h1></div>'
+  +'<div class="card"><div class="table-wrap"><table><thead><tr><th>Name</th><th>Position</th><th>Termination date</th><th>Reason</th><th></th></tr></thead><tbody>'
+  +(rows || '<tr><td colspan="5" class="empty-row">No former employees on record.</td></tr>')
+  +'</tbody></table></div></div>';
+}
+
+/* ---------- Pay Runs ---------- */
+function renderPayruns(){
+  var runs = companyPayruns();
+  var rows = runs.map(function(r){
+    return '<tr><td><b>'+esc(r.periodLabel)+'</b></td><td>'+esc(r.payDate||'—')+'</td><td>'+r.lines.length+'</td>'
+    +'<td>'+fmtZAR(r.totals.gross)+'</td><td>'+fmtZAR(r.totals.netPay)+'</td><td>'+statusPill(r.status)+'</td>'
+    +'<td><span class="link-btn" data-open-run="'+r.id+'">'+(r.status==='draft'?'Review & finalize':'View')+'</span></td></tr>';
+  }).join('');
+  return ''
+  +'<div class="topbar"><div><h1>Pay Runs</h1><div class="subtitle">Create and finalize monthly pay runs</div></div>'
+    +'<div class="topbar-right"><button class="btn btn-gold" id="newRunBtn">+ New pay run</button></div></div>'
+  +'<div class="card"><div class="table-wrap"><table><thead><tr><th>Period</th><th>Pay date</th><th>Employees</th><th>Gross</th><th>Net pay</th><th>Status</th><th></th></tr></thead><tbody>'
+  +(rows || '<tr><td colspan="7" class="empty-row">No pay runs yet.</td></tr>')
+  +'</tbody></table></div></div>';
+}
+
+function renderPayrunDetail(runId){
+  var r = state.payruns.find(function(x){return x.id===runId;});
+  if(!r) return renderPayruns();
+  var rows = r.lines.map(function(l){
+    return '<tr><td>'+esc(l.employeeName)+'</td><td>'+fmtZAR(l.gross)+'</td><td>'+fmtZAR(l.paye)+'</td>'
+    +'<td>'+fmtZAR(l.uifEmployee)+'</td><td>'+fmtZAR(l.totalDeductions)+'</td><td><b>'+fmtZAR(l.netPay)+'</b></td>'
+    +'<td><span class="link-btn" data-view-payslip="'+r.id+'|'+l.employeeId+'">Payslip</span></td></tr>';
+  }).join('');
+  return ''
+  +'<div class="topbar"><div><h1>'+esc(r.periodLabel)+'</h1><div class="subtitle">Pay date '+esc(r.payDate||'—')+' · '+statusPill(r.status)+'</div></div>'
+    +'<div class="topbar-right page-actions">'
+      +'<button class="btn" data-route-link="payruns">← Back to pay runs</button>'
+      +(r.status==='draft' ? '<button class="btn btn-primary" id="finalizeRunBtn" data-run="'+r.id+'">Finalize pay run</button>' : '')
+    +'</div></div>'
+  +'<div class="stat-grid">'
+    +statCard('GROSS PAY', fmtZAR(r.totals.gross), r.lines.length+' employees')
+    +statCard('PAYE', fmtZAR(r.totals.paye), 'Withheld this period')
+    +statCard('UIF (BOTH SIDES)', fmtZAR(r.totals.uifEmployee+r.totals.uifEmployer), 'Employee + employer 1% each')
+    +statCard('NET PAY', fmtZAR(r.totals.netPay), 'Total paid to employees')
+  +'</div>'
+  +'<div class="card"><div class="table-wrap"><table><thead><tr><th>Employee</th><th>Gross</th><th>PAYE</th><th>UIF (emp.)</th><th>Total deductions</th><th>Net pay</th><th></th></tr></thead><tbody>'
+  +rows+'</tbody></table></div></div>';
+}
+
+/* ---------- Payslips ---------- */
+function renderPayslips(){
+  var runs = companyPayruns().filter(function(r){return r.status==='finalized';});
+  var options = runs.map(function(r){ return '<option value="'+r.id+'">'+esc(r.periodLabel)+'</option>'; }).join('');
+  var sel = state.routeParam && state.routeParam.runId ? state.routeParam.runId : (runs[0]?runs[0].id:null);
+  var run = runs.find(function(r){return r.id===sel;});
+  var rows = run ? run.lines.map(function(l){
+    return '<tr><td>'+esc(l.employeeName)+'</td><td>'+fmtZAR(l.gross)+'</td><td>'+fmtZAR(l.netPay)+'</td>'
+      +'<td><span class="link-btn" data-view-payslip="'+run.id+'|'+l.employeeId+'">View payslip</span></td></tr>';
+  }).join('') : '';
+  return ''
+  +'<div class="topbar"><div><h1>Payslips</h1><div class="subtitle">Finalized pay runs only</div></div>'
+    +'<div class="topbar-right">'+(runs.length?'<select id="payslipRunSelect">'+options+'</select>':'')+'</div></div>'
+  +'<div class="card"><div class="table-wrap"><table><thead><tr><th>Employee</th><th>Gross</th><th>Net pay</th><th></th></tr></thead><tbody>'
+  +(rows || '<tr><td colspan="4" class="empty-row">No finalized pay runs yet.</td></tr>')
+  +'</tbody></table></div></div>';
+}
+
+function renderPayslipView(runId, employeeId){
+  var r = state.payruns.find(function(x){return x.id===runId;});
+  var line = r && r.lines.find(function(l){return l.employeeId===employeeId;});
+  var emp = employeeById(employeeId);
+  var c = currentCompany();
+  if(!r || !line || !emp) return renderPayslips();
+  return ''
+  +'<div class="topbar"><div><h1>Payslip</h1><div class="subtitle">'+esc(r.periodLabel)+'</div></div>'
+    +'<div class="topbar-right"><button class="btn" onclick="window.print()">Print / Save PDF</button>'
+    +'<button class="btn" data-route-link="payslips">← Back</button></div></div>'
+  +'<div class="payslip">'
+    +'<div class="payslip-head"><div><h2>'+esc(c.name)+'</h2><div class="stat-caption">PAYE ref: '+esc(c.payeRef||'—')+' · UIF ref: '+esc(c.uifRef||'—')+'</div></div>'
+      +'<div style="text-align:right"><div class="label-caps">PAYSLIP</div><div class="stat-caption">'+esc(r.periodLabel)+'</div><div class="stat-caption">Pay date: '+esc(r.payDate||'—')+'</div></div></div>'
+    +'<div class="payslip-grid">'
+      +'<div><div><b>'+esc(emp.firstName+' '+emp.lastName)+'</b></div><div>Employee no: '+esc(emp.employeeNo||'—')+'</div><div>Position: '+esc(emp.position||'—')+'</div><div>ID number: '+esc(emp.idNumber||'—')+'</div></div>'
+      +'<div><div>Tax number: '+esc(emp.taxNumber||'—')+'</div><div>UIF number: '+esc(emp.uifNumber||'—')+'</div><div>Bank: '+esc(emp.bankName||'—')+' '+esc(emp.accountNumber?('••••'+String(emp.accountNumber).slice(-4)):'')+'</div></div>'
+    +'</div>'
+    +'<table class="payslip-table"><thead><tr><th>Earnings</th><th style="text-align:right">Amount</th><th>Deductions</th><th style="text-align:right">Amount</th></tr></thead>'
+    +'<tbody>'
+      +'<tr><td>Basic salary</td><td style="text-align:right">'+fmtZAR(line.basic)+'</td><td>PAYE (income tax)</td><td style="text-align:right">'+fmtZAR(line.paye)+'</td></tr>'
+      +'<tr><td>Travel allowance</td><td style="text-align:right">'+fmtZAR(line.travelAllowance)+'</td><td>UIF (employee 1%)</td><td style="text-align:right">'+fmtZAR(line.uifEmployee)+'</td></tr>'
+      +'<tr><td>Other allowance</td><td style="text-align:right">'+fmtZAR(line.otherAllowance)+'</td><td>Retirement fund contribution</td><td style="text-align:right">'+fmtZAR(line.retirementDeduction)+'</td></tr>'
+      +'<tr><td></td><td></td><td>Medical aid contribution</td><td style="text-align:right">'+fmtZAR(line.medicalAidDeduction)+'</td></tr>'
+      +'<tr><td></td><td></td><td>Other deductions</td><td style="text-align:right">'+fmtZAR(line.otherDeduction)+'</td></tr>'
+      +'<tr><td><b>Gross earnings</b></td><td style="text-align:right"><b>'+fmtZAR(line.gross)+'</b></td><td><b>Total deductions</b></td><td style="text-align:right"><b>'+fmtZAR(line.totalDeductions)+'</b></td></tr>'
+      +'<tr class="net-row"><td colspan="2">NET PAY</td><td colspan="2" style="text-align:right">'+fmtZAR(line.netPay)+'</td></tr>'
+    +'</tbody></table>'
+    +'<div class="disclaimer">Employer contributions (not deducted from net pay): UIF employer '+fmtZAR(line.uifEmployer)+', SDL employer '+fmtZAR(line.sdlEmployer)+'. Total cost to company: '+fmtZAR(line.employerCost)+'.'
+    +'<br>PAYE is calculated using the standard monthly-average annualisation method for the '+ '2026/2027' +' tax year. Please have a registered payroll practitioner or tax professional verify figures before submission to SARS.</div>'
+  +'</div>';
+}
+
+/* ---------- Leave ---------- */
+function renderLeave(){
+  var active = companyEmployees('active');
+  var c = currentCompany();
+  var rows = active.map(function(e){
+    var ann = daysOr(e.annualLeaveDaysPerYear, c.defaultAnnualLeaveDays);
+    var sick = daysOr(e.sickLeaveDaysPerYear, c.defaultSickLeaveDays);
+    var fam = daysOr(e.familyRespDaysPerYear, c.defaultFamilyRespDays);
+    var annTaken = leaveTakenFor(e.id,'annual');
+    var sickTaken = leaveTakenFor(e.id,'sick');
+    var famTaken = leaveTakenFor(e.id,'family');
+    return '<tr><td><b>'+esc(e.firstName+' '+e.lastName)+'</b></td>'
+    +'<td>'+annTaken+' / '+ann+'</td><td>'+sickTaken+' / '+sick+'</td><td>'+famTaken+' / '+fam+'</td>'
+    +'<td><span class="link-btn" data-capture-leave="'+e.id+'">Capture leave</span></td></tr>';
+  }).join('');
+  var recent = companyLeave().sort(function(a,b){return b.startDate<a.startDate?-1:1;}).slice(0,8).map(function(l){
+    var e = employeeById(l.employeeId);
+    return '<tr><td>'+esc(e?e.firstName+' '+e.lastName:'—')+'</td><td>'+capitalize(l.type)+'</td><td>'+esc(l.startDate)+' → '+esc(l.endDate)+'</td><td>'+l.days+'</td>'
+    +'<td><span class="link-btn" data-delete-leave="'+l.id+'">Remove</span></td></tr>';
+  }).join('');
+  return ''
+  +'<div class="topbar"><div><h1>Leave &amp; Attendance</h1><div class="subtitle">Annual / sick / family responsibility leave balances (days taken vs. annual entitlement)</div></div></div>'
+  +'<div class="two-col">'
+    +'<div class="card"><div class="card-title" style="margin-bottom:10px;">Leave balances</div><div class="table-wrap"><table><thead><tr><th>Employee</th><th>Annual</th><th>Sick</th><th>Family resp.</th><th></th></tr></thead><tbody>'
+    +(rows||'<tr><td colspan="5" class="empty-row">No active employees.</td></tr>')+'</tbody></table></div></div>'
+    +'<div class="card"><div class="card-title" style="margin-bottom:10px;">Recently captured</div><div class="table-wrap"><table><thead><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Days</th><th></th></tr></thead><tbody>'
+    +(recent||'<tr><td colspan="5" class="empty-row">No leave captured yet.</td></tr>')+'</tbody></table></div>'
+  +'</div>'
+  +'<div class="disclaimer">Leave entitlements shown here are simplified defaults for a standard 5-day work week. Statutory BCEA sick-leave cycles (36 months) and annual leave accrual rules are more complex than this simple model — verify against the BCEA and your employment contracts for compliance-critical decisions.</div>';
+}
+function daysOr(v,d){ return (v===undefined||v===null||v==='') ? d : Number(v); }
+function capitalize(s){ return s ? s[0].toUpperCase()+s.slice(1) : s; }
+
+/* ---------- Company & Statutory Info ---------- */
+function renderCompany(){
+  var c = currentCompany();
+  if(!c) return '<div class="topbar"><h1>Company</h1></div><div class="card">No company selected.</div>';
+  return ''
+  +'<div class="topbar"><h1>Company &amp; Statutory Info</h1></div>'
+  +'<div class="card" style="max-width:640px;">'
+    +'<div class="form-grid">'
+      +field('Company name','companyName',c.name)
+      +field('Registration number','companyReg',c.regNo)
+      +field('PAYE reference number','companyPaye',c.payeRef)
+      +field('UIF reference number','companyUif',c.uifRef)
+      +field('SDL reference number','companySdl',c.sdlRef)
+      +'<div class="form-field"><label>SDL registered (annual payroll &gt; R500,000)</label>'
+        +'<select id="companySdlApplicable"><option value="false"'+(!c.sdlApplicable?' selected':'')+'>No</option><option value="true"'+(c.sdlApplicable?' selected':'')+'>Yes</option></select></div>'
+      +field('Pay day of month','companyPayDay',c.payDay)
+      +'<div class="form-field span2"><label>Address</label><textarea id="companyAddress" rows="2">'+esc(c.address)+'</textarea></div>'
+      +field('Default annual leave days/year','companyAnnLeave',c.defaultAnnualLeaveDays)
+      +field('Default sick leave days/year','companySickLeave',c.defaultSickLeaveDays)
+      +field('Default family resp. days/year','companyFamLeave',c.defaultFamilyRespDays)
+    +'</div>'
+    +'<div class="modal-actions"><button class="btn btn-primary" id="saveCompanyBtn">Save company details</button></div>'
+  +'</div>';
+}
+function field(label,id,val,type){
+  return '<div class="form-field"><label>'+label+'</label><input type="'+(type||'text')+'" id="'+id+'" value="'+esc(val==null?'':val)+'"></div>';
+}
+
+/* ---------- Reports ---------- */
+function renderReports(){
+  var runs = companyPayruns().filter(function(r){return r.status==='finalized';});
+  var totalGross=0,totalPaye=0,totalUifE=0,totalUifR=0,totalSdl=0,totalNet=0,totalCost=0;
+  runs.forEach(function(r){
+    totalGross+=r.totals.gross; totalPaye+=r.totals.paye; totalUifE+=r.totals.uifEmployee;
+    totalUifR+=r.totals.uifEmployer; totalSdl+=r.totals.sdlEmployer; totalNet+=r.totals.netPay; totalCost+=r.totals.employerCost;
+  });
+  var rows = runs.map(function(r){
+    return '<tr><td>'+esc(r.periodLabel)+'</td><td>'+fmtZAR(r.totals.gross)+'</td><td>'+fmtZAR(r.totals.paye)+'</td>'
+    +'<td>'+fmtZAR(r.totals.uifEmployee+r.totals.uifEmployer)+'</td><td>'+fmtZAR(r.totals.sdlEmployer)+'</td><td>'+fmtZAR(r.totals.netPay)+'</td></tr>';
+  }).join('');
+  return ''
+  +'<div class="topbar"><div><h1>Reports</h1><div class="subtitle">PAYE / UIF / SDL liability summary — finalized pay runs, this tax year</div></div>'
+    +'<div class="topbar-right"><button class="btn" id="exportCsvBtn">Export CSV</button></div></div>'
+  +'<div class="stat-grid">'
+    +statCard('TOTAL PAYE LIABILITY', fmtZAR(totalPaye), 'Owed to SARS')
+    +statCard('TOTAL UIF (BOTH SIDES)', fmtZAR(totalUifE+totalUifR), 'Owed to UIF')
+    +statCard('TOTAL SDL', fmtZAR(totalSdl), 'Owed to SETA/SARS')
+    +statCard('TOTAL PAYROLL COST', fmtZAR(totalCost), 'Gross + employer contributions')
+  +'</div>'
+  +'<div class="card"><div class="table-wrap"><table><thead><tr><th>Period</th><th>Gross</th><th>PAYE</th><th>UIF</th><th>SDL</th><th>Net pay</th></tr></thead><tbody>'
+  +(rows||'<tr><td colspan="6" class="empty-row">No finalized pay runs yet.</td></tr>')
+  +'</tbody></table></div></div>';
+}
+
+/* ===================== Event wiring ===================== */
+function wireRouteEvents(){
+  document.querySelectorAll('[data-route-link]').forEach(function(el){
+    el.onclick = function(){ navigate(el.dataset.routeLink); };
+  });
+  document.querySelectorAll('[data-open-run]').forEach(function(el){
+    el.onclick = function(){ state.route='payrun-detail'; state.routeParam={runId:el.dataset.openRun}; renderCustom(); };
+  });
+  document.querySelectorAll('[data-view-payslip]').forEach(function(el){
+    el.onclick = function(){
+      var parts = el.dataset.viewPayslip.split('|');
+      document.getElementById('page-root').innerHTML = renderPayslipView(parts[0], parts[1]);
+      wireRouteEvents();
+    };
+  });
+  var payslipSel = document.getElementById('payslipRunSelect');
+  if(payslipSel){
+    payslipSel.onchange = function(){
+      state.routeParam = {runId: payslipSel.value};
+      document.getElementById('page-root').innerHTML = renderPayslips();
+      wireRouteEvents();
+    };
+  }
+
+  var addEmpBtn = document.getElementById('addEmpBtn');
+  if(addEmpBtn) addEmpBtn.onclick = function(){ openEmployeeModal(null); };
+  document.querySelectorAll('[data-edit-emp]').forEach(function(el){
+    el.onclick = function(){ openEmployeeModal(el.dataset.editEmp); };
+  });
+  document.querySelectorAll('[data-terminate-emp]').forEach(function(el){
+    el.onclick = function(){ openTerminateModal(el.dataset.terminateEmp); };
+  });
+  document.querySelectorAll('[data-reinstate-emp]').forEach(function(el){
+    el.onclick = async function(){
+      var e = employeeById(el.dataset.reinstateEmp);
+      e.status='active'; e.terminationDate=''; e.terminationReason='';
+      await saveEmployee(e); navigate('employees');
+    };
+  });
+
+  var newRunBtn = document.getElementById('newRunBtn');
+  if(newRunBtn) newRunBtn.onclick = openNewRunModal;
+  var finalizeBtn = document.getElementById('finalizeRunBtn');
+  if(finalizeBtn) finalizeBtn.onclick = function(){ finalizeRun(finalizeBtn.dataset.run); };
+
+  document.querySelectorAll('[data-capture-leave]').forEach(function(el){
+    el.onclick = function(){ openLeaveModal(el.dataset.captureLeave); };
+  });
+  document.querySelectorAll('[data-delete-leave]').forEach(function(el){
+    el.onclick = async function(){ await deleteLeave(el.dataset.deleteLeave); navigate('leave'); };
+  });
+
+  var saveCompanyBtn = document.getElementById('saveCompanyBtn');
+  if(saveCompanyBtn) saveCompanyBtn.onclick = async function(){
+    var c = currentCompany();
+    c.name = document.getElementById('companyName').value.trim() || c.name;
+    c.regNo = document.getElementById('companyReg').value.trim();
+    c.payeRef = document.getElementById('companyPaye').value.trim();
+    c.uifRef = document.getElementById('companyUif').value.trim();
+    c.sdlRef = document.getElementById('companySdl').value.trim();
+    c.sdlApplicable = document.getElementById('companySdlApplicable').value === 'true';
+    c.payDay = Number(document.getElementById('companyPayDay').value)||25;
+    c.address = document.getElementById('companyAddress').value;
+    c.defaultAnnualLeaveDays = Number(document.getElementById('companyAnnLeave').value)||15;
+    c.defaultSickLeaveDays = Number(document.getElementById('companySickLeave').value)||10;
+    c.defaultFamilyRespDays = Number(document.getElementById('companyFamLeave').value)||3;
+    await saveCompany(c);
+    render();
+  };
+
+  var exportBtn = document.getElementById('exportCsvBtn');
+  if(exportBtn) exportBtn.onclick = exportReportsCsv;
+}
+function renderCustom(){
+  if(state.route==='payrun-detail'){
+    document.getElementById('page-root').innerHTML = renderPayrunDetail(state.routeParam.runId);
+    renderCompanySwitcher();
+    wireRouteEvents();
+  }
+}
+
+/* ---------- Modals ---------- */
+function openModal(html){
+  var root = document.getElementById('modal-root');
+  root.innerHTML = '<div class="modal-overlay" id="modalOverlay"><div class="modal">'+html+'</div></div>';
+  document.getElementById('modalOverlay').addEventListener('click', function(e){
+    if(e.target.id==='modalOverlay') closeModal();
+  });
+}
+function closeModal(){ document.getElementById('modal-root').innerHTML=''; }
+
+function openEmployeeModal(id){
+  var e = id ? employeeById(id) : {
+    id: uid(), companyId: state.currentCompanyId, status:'active', payFrequency:'monthly',
+    firstName:'', lastName:'', position:'', startDate: todayISO()
+  };
+  var isHourly = e.payFrequency==='hourly';
+  openModal(''
+    +'<h2>'+(id?'Edit employee':'Add employee')+'</h2>'
+    +'<div class="section-title">Personal details</div>'
+    +'<div class="form-grid">'
+      +field('First name','fFirst',e.firstName)+field('Last name','fLast',e.lastName)
+      +field('ID number','fId',e.idNumber)+field('Date of birth','fDob',e.dob,'date')
+      +field('Tax number','fTax',e.taxNumber)+field('UIF number','fUif',e.uifNumber)
+      +field('Position','fPosition',e.position)+field('Employee number','fEmpNo',e.employeeNo)
+      +field('Start date','fStart',e.startDate,'date')
+    +'</div>'
+    +'<div class="section-title">Pay</div>'
+    +'<div class="form-grid">'
+      +'<div class="form-field"><label>Pay frequency</label><select id="fPayFreq">'
+        +'<option value="monthly"'+(isHourly?'':' selected')+'>Monthly salary</option>'
+        +'<option value="hourly"'+(isHourly?' selected':'')+'>Hourly rate</option></select></div>'
+      +field('Basic monthly salary (if monthly)','fBasic',e.basicSalary,'number')
+      +field('Hourly rate (if hourly)','fHourly',e.hourlyRate,'number')
+      +field('Standard hours/month (if hourly)','fStdHours',e.standardHours||160,'number')
+      +field('Travel allowance (monthly)','fTravel',e.travelAllowance,'number')
+      +field('Other allowance (monthly)','fOther',e.otherAllowance,'number')
+    +'</div>'
+    +'<div class="section-title">Deductions &amp; benefits</div>'
+    +'<div class="form-grid">'
+      +field('Retirement fund contribution (employee, monthly R)','fRet',e.retirementContribution,'number')
+      +field('Medical aid contribution (employee, monthly R)','fMed',e.medicalAidContribution,'number')
+      +field('Medical aid dependants (incl. main member, 0 = none)','fMedDep',e.medicalDependants||0,'number')
+      +field('Other monthly deduction (R)','fOtherDed',e.otherDeduction,'number')
+    +'</div>'
+    +'<div class="section-title">Banking</div>'
+    +'<div class="form-grid">'
+      +field('Bank name','fBank',e.bankName)+field('Account number','fAcc',e.accountNumber)
+      +field('Branch code','fBranch',e.branchCode)
+      +'<div class="form-field"><label>Account type</label><select id="fAccType">'
+        +['Cheque/Current','Savings'].map(function(t){return '<option'+(e.accountType===t?' selected':'')+'>'+t+'</option>';}).join('')
+      +'</select></div>'
+    +'</div>'
+    +'<div class="section-title">Leave entitlement (days/year, blank = company default)</div>'
+    +'<div class="form-grid">'
+      +field('Annual leave days/year','fAnnLeave',e.annualLeaveDaysPerYear)
+      +field('Sick leave days/year','fSickLeave',e.sickLeaveDaysPerYear)
+      +field('Family responsibility days/year','fFamLeave',e.familyRespDaysPerYear)
+    +'</div>'
+    +'<div class="modal-actions"><button class="btn" id="cancelEmpBtn">Cancel</button><button class="btn btn-primary" id="saveEmpBtn">Save employee</button></div>'
+  );
+  document.getElementById('cancelEmpBtn').onclick = closeModal;
+  document.getElementById('saveEmpBtn').onclick = async function(){
+    e.firstName = val('fFirst'); e.lastName = val('fLast'); e.idNumber = val('fId'); e.dob = val('fDob');
+    e.taxNumber = val('fTax'); e.uifNumber = val('fUif'); e.position = val('fPosition'); e.employeeNo = val('fEmpNo');
+    e.startDate = val('fStart'); e.payFrequency = val('fPayFreq');
+    e.basicSalary = numVal('fBasic'); e.hourlyRate = numVal('fHourly'); e.standardHours = numVal('fStdHours');
+    e.travelAllowance = numVal('fTravel'); e.otherAllowance = numVal('fOther');
+    e.retirementContribution = numVal('fRet'); e.medicalAidContribution = numVal('fMed');
+    e.medicalDependants = numVal('fMedDep'); e.otherDeduction = numVal('fOtherDed');
+    e.bankName = val('fBank'); e.accountNumber = val('fAcc'); e.branchCode = val('fBranch'); e.accountType = val('fAccType');
+    e.annualLeaveDaysPerYear = val('fAnnLeave')===''?null:numVal('fAnnLeave');
+    e.sickLeaveDaysPerYear = val('fSickLeave')===''?null:numVal('fSickLeave');
+    e.familyRespDaysPerYear = val('fFamLeave')===''?null:numVal('fFamLeave');
+    if(!e.firstName){ alert('First name is required.'); return; }
+    await saveEmployee(e);
+    closeModal();
+    navigate('employees');
+  };
+}
+function val(id){ var el=document.getElementById(id); return el?el.value.trim():''; }
+function numVal(id){ var el=document.getElementById(id); return el && el.value!=='' ? Number(el.value) : 0; }
+
+function openTerminateModal(id){
+  var e = employeeById(id);
+  openModal(''
+    +'<h2>Terminate '+esc(e.firstName+' '+e.lastName)+'</h2>'
+    +'<div class="form-grid">'
+      +field('Termination date','tDate',todayISO(),'date')
+      +field('Reason','tReason','')
+    +'</div>'
+    +'<div class="modal-actions"><button class="btn" id="cancelTermBtn">Cancel</button><button class="btn btn-danger" id="confirmTermBtn">Confirm termination</button></div>'
+  );
+  document.getElementById('cancelTermBtn').onclick = closeModal;
+  document.getElementById('confirmTermBtn').onclick = async function(){
+    e.status='terminated'; e.terminationDate=val('tDate'); e.terminationReason=val('tReason');
+    await saveEmployee(e);
+    closeModal();
+    navigate('employees');
+  };
+}
+
+function openLeaveModal(employeeId){
+  var e = employeeById(employeeId);
+  openModal(''
+    +'<h2>Capture leave — '+esc(e.firstName+' '+e.lastName)+'</h2>'
+    +'<div class="form-grid">'
+      +'<div class="form-field"><label>Leave type</label><select id="lType"><option value="annual">Annual</option><option value="sick">Sick</option><option value="family">Family responsibility</option></select></div>'
+      +field('Start date','lStart',todayISO(),'date')
+      +field('End date','lEnd',todayISO(),'date')
+      +field('Note (optional)','lNote','')
+    +'</div>'
+    +'<div class="modal-actions"><button class="btn" id="cancelLeaveBtn">Cancel</button><button class="btn btn-primary" id="saveLeaveBtn">Save leave</button></div>'
+  );
+  document.getElementById('cancelLeaveBtn').onclick = closeModal;
+  document.getElementById('saveLeaveBtn').onclick = async function(){
+    var start=val('lStart'), end=val('lEnd');
+    var days = Math.max(1, daysBetween(start,end));
+    var doc = { id: uid(), companyId: state.currentCompanyId, employeeId: employeeId,
+      type: val('lType'), startDate:start, endDate:end, days:days, note: val('lNote') };
+    await saveLeave(doc);
+    closeModal();
+    navigate('leave');
+  };
+}
+
+function openNewRunModal(){
+  var now = new Date();
+  openModal(''
+    +'<h2>New pay run</h2>'
+    +'<div class="form-grid">'
+      +'<div class="form-field"><label>Month</label><select id="rMonth">'
+        +Array.from({length:12},function(_,i){return i+1;}).map(function(m){
+          return '<option value="'+m+'"'+(m===now.getMonth()+1?' selected':'')+'>'+new Date(2000,m-1,1).toLocaleDateString('en-ZA',{month:'long'})+'</option>';
+        }).join('')+'</select></div>'
+      +field('Year','rYear',now.getFullYear(),'number')
+      +field('Pay date','rPayDate',todayISO(),'date')
+    +'</div>'
+    +'<div class="helptext">A draft pay run will be created for all active employees. Review and finalize it from the Pay Runs screen.</div>'
+    +'<div class="modal-actions"><button class="btn" id="cancelRunBtn">Cancel</button><button class="btn btn-primary" id="createRunBtn">Create draft</button></div>'
+  );
+  document.getElementById('cancelRunBtn').onclick = closeModal;
+  document.getElementById('createRunBtn').onclick = async function(){
+    var month = Number(val('rMonth')), year = numVal('rYear'), payDate = val('rPayDate');
+    var company = currentCompany();
+    var active = companyEmployees('active');
+    if(!active.length){ alert('Add at least one active employee before creating a pay run.'); return; }
+    var lines = active.map(function(emp){ return calcPayslipLine(emp, company); });
+    var totals = lines.reduce(function(t,l){
+      t.gross+=l.gross; t.paye+=l.paye; t.uifEmployee+=l.uifEmployee; t.uifEmployer+=l.uifEmployer;
+      t.sdlEmployer+=l.sdlEmployer; t.netPay+=l.netPay; t.employerCost+=l.employerCost; return t;
+    }, {gross:0,paye:0,uifEmployee:0,uifEmployer:0,sdlEmployer:0,netPay:0,employerCost:0});
+    var run = {
+      id: uid(), companyId: state.currentCompanyId, periodMonth: month, periodYear: year,
+      periodLabel: monthLabel(year, month), payDate: payDate, status:'draft', lines: lines, totals: totals,
+      createdAt: Date.now()
+    };
+    await savePayrun(run);
+    closeModal();
+    state.route='payrun-detail'; state.routeParam={runId:run.id};
+    renderCustom();
+  };
+}
+async function finalizeRun(runId){
+  var r = state.payruns.find(function(x){return x.id===runId;});
+  if(!r) return;
+  if(!confirm('Finalize this pay run? Payslips will be generated and figures will be locked.')) return;
+  r.status='finalized'; r.finalizedAt = Date.now();
+  await savePayrun(r);
+  renderCustom();
+}
+
+function exportReportsCsv(){
+  var runs = companyPayruns().filter(function(r){return r.status==='finalized';});
+  var lines = ['Period,Pay Date,Gross,PAYE,UIF Employee,UIF Employer,SDL,Net Pay,Employer Cost'];
+  runs.forEach(function(r){
+    lines.push([r.periodLabel, r.payDate, r.totals.gross, r.totals.paye, r.totals.uifEmployee, r.totals.uifEmployer, r.totals.sdlEmployer, r.totals.netPay, r.totals.employerCost].join(','));
+  });
+  var csv = lines.join('\n');
+  claude.use('downloads').then(function(downloads){
+    if(downloads){
+      downloads.save({filename:'reconi-payroll-report.csv', data: csv}).catch(function(){ fallbackCsv(csv); });
+    } else { fallbackCsv(csv); }
+  }).catch(function(){ fallbackCsv(csv); });
+}
+function fallbackCsv(csv){
+  alert('Download isn\'t available in this view — here is the CSV data:\n\n'+csv.slice(0,2000));
+}
+
+/* ---------- Sidebar / company menu wiring ---------- */
+function wireStaticEvents(){
+  document.querySelectorAll('.nav-item').forEach(function(el){
+    el.addEventListener('click', function(){ navigate(el.dataset.route); });
+  });
+  var pill = document.getElementById('companyPill');
+  var menu = document.getElementById('companyMenu');
+  pill.addEventListener('click', function(e){ e.stopPropagation(); menu.classList.toggle('open'); });
+  document.addEventListener('click', function(){ menu.classList.remove('open'); });
+  menu.addEventListener('click', function(e){ e.stopPropagation(); });
+
+  document.getElementById('menuToggle').addEventListener('click', function(){
+    document.getElementById('sidebar').classList.add('open');
+    document.getElementById('scrim').classList.add('open');
+  });
+  document.getElementById('scrim').addEventListener('click', closeSidebarMobile);
+}
+function closeSidebarMobile(){
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('scrim').classList.remove('open');
+}
+document.addEventListener('click', function(e){
+  var menu = document.getElementById('companyMenu');
+  if(!menu) return;
+  var item = e.target.closest('.company-menu-item');
+  if(item){
+    state.currentCompanyId = item.dataset.cid;
+    saveLastCompany(state.currentCompanyId);
+    menu.classList.remove('open');
+    navigate(state.route);
+  }
+  var addBtn = e.target.closest('#addCompanyBtn');
+  if(addBtn){
+    var name = prompt('New client company name:');
+    if(name && name.trim()){
+      var nc = defaultCompany(name.trim());
+      saveCompany(nc).then(function(){
+        state.currentCompanyId = nc.id;
+        saveLastCompany(nc.id);
+        navigate('company');
+      });
+    }
+  }
+});
+
+/* ===================== Boot ===================== */
+function finishBoot(){
+  wireStaticEvents();
+  document.querySelector('.nav-item[data-route="dashboard"]').classList.add('active');
+  render();
+}
+initDb();
+
+})();
+</script>
