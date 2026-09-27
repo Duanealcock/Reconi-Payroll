@@ -430,7 +430,13 @@ tr:last-child td{border-bottom:none;}
 "use strict";
 
 /* ===================== Utilities ===================== */
-function uid(){ return 'id_' + Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
+function uid(){
+  if(typeof crypto!=='undefined' && crypto.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c){
+    var r = Math.random()*16|0, v = c==='x'?r:(r&0x3|0x8);
+    return v.toString(16);
+  });
+}
 function fmtZAR(n){
   n = Number(n)||0;
   var neg = n < 0; n = Math.abs(n);
@@ -583,7 +589,6 @@ function calcPayslipLine(emp, company, extra){
 }
 
 /* ===================== DB layer ===================== */
-var db = null;
 var dbReady = false;
 var booted = false;
 var emp501Cache = null;
@@ -933,6 +938,7 @@ async function handlePostAuth(){
   state.currentUser = profile;
   if(!profile.active){ renderPendingApproval(profile.email); showLogin(); return; }
   if(profile.role==='client'){ renderClientPlaceholder(); showLogin(); return; }
+  await loadPayrollData();
   touchActivity();
   startSessionWatch();
   showApp();
@@ -955,6 +961,10 @@ function signOut(){
   logActivity('logout', 'Signed out');
   stopSessionWatch();
   state.currentUser = null;
+  state.companies = []; state.employees = []; state.payruns = []; state.leave = [];
+  state.emp201 = []; state.emp501 = []; state.uif = []; state.auditLog = [];
+  dbReady = false;
+  booted = false;
   showLogin();
   renderSignIn();
   if(sb){ sb.auth.signOut().catch(function(){}); }
@@ -1004,60 +1014,83 @@ function defaultCompany(name){
   };
 }
 
-async function initDb(){
-  try{
-    db = await claude.use('db');
-  }catch(e){ db = null; }
-  if(!db){
+async function loadPayrollData(){
+  if(!sb){
     setSync('Offline — changes stay in this browser only', false);
     await loadLocalFallback();
-    checkAuthAndBoot();
     return;
   }
   try{
-    var companiesRes = await db.collection('companies').get();
-    var companies = (companiesRes && companiesRes.docs) || [];
+    var companiesRes = await sb.from('companies').select('*').order('name');
+    if(companiesRes.error) throw companiesRes.error;
+    var companies = (companiesRes.data||[]).map(companyFromRow);
     if(!companies.length){
       var seed = defaultCompany('Test Client (Pty) Ltd');
-      await db.doc('companies/'+seed.id).set(seed);
-      companies = [seed];
+      var insRes = await sb.from('companies').insert(companyToRow(seed)).select().single();
+      if(insRes.error) throw insRes.error;
+      companies = [companyFromRow(insRes.data)];
     }
     state.companies = companies;
     var last = loadLastCompany();
     state.currentCompanyId = (last && companies.some(function(c){return c.id===last;})) ? last : companies[0].id;
 
-    var empRes = await db.collection('employees').get();
-    state.employees = (empRes && empRes.docs) || [];
-    var prRes = await db.collection('payruns').get();
-    state.payruns = (prRes && prRes.docs) || [];
-    var lvRes = await db.collection('leave_requests').get();
-    state.leave = (lvRes && lvRes.docs) || [];
-    var e201Res = await db.collection('emp201').get();
-    state.emp201 = (e201Res && e201Res.docs) || [];
-    var e501Res = await db.collection('emp501').get();
-    state.emp501 = (e501Res && e501Res.docs) || [];
-    var uifRes = await db.collection('uif').get();
-    state.uif = (uifRes && uifRes.docs) || [];
-    var logRes = await db.collection('activity_log').get();
-    state.auditLog = (logRes && logRes.docs) || [];
+    var empRes = await sb.from('employees').select('*');
+    if(empRes.error) throw empRes.error;
+    state.employees = (empRes.data||[]).map(employeeFromRow);
 
-    var usersRes = await db.collection('users').get();
-    var users = (usersRes && usersRes.docs) || [];
-    if(!users.length){
-      var seedUser = await defaultUser();
-      await db.doc('users/'+seedUser.id).set(seedUser);
-      users = [seedUser];
-    }
-    state.users = users;
+    var prRes = await sb.from('pay_runs').select('*');
+    if(prRes.error) throw prRes.error;
+    state.payruns = (prRes.data||[]).map(payrunFromRow);
+
+    var lvRes = await sb.from('leave_requests').select('*');
+    if(lvRes.error) throw lvRes.error;
+    state.leave = (lvRes.data||[]).map(leaveFromRow);
+
+    var e201Res = await sb.from('emp201').select('*');
+    if(e201Res.error) throw e201Res.error;
+    state.emp201 = (e201Res.data||[]).map(emp201FromRow);
+
+    var e501Res = await sb.from('emp501').select('*');
+    if(e501Res.error) throw e501Res.error;
+    state.emp501 = (e501Res.data||[]).map(emp501FromRow);
+
+    var uifRes = await sb.from('uif').select('*');
+    if(uifRes.error) throw uifRes.error;
+    state.uif = (uifRes.data||[]).map(uifFromRow);
+
+    var logRes = await sb.from('activity_log').select('*').order('created_at',{ascending:false}).limit(500);
+    if(logRes.error) throw logRes.error;
+    state.auditLog = (logRes.data||[]).map(activityFromRow);
+
+    await loadLocalUsersOnly();
 
     setSync('Saved just now', true);
     dbReady = true;
   }catch(e){
-    console.log('db init error', e);
+    console.log('supabase load error', e);
     setSync('Offline — changes stay in this browser only', false);
     await loadLocalFallback();
   }
-  checkAuthAndBoot();
+}
+
+async function loadLocalUsersOnly(){
+  try{
+    var raw = localStorage.getItem('reconi_fallback_data');
+    var data = raw ? JSON.parse(raw) : null;
+    state.users = (data && data.users) || [];
+  }catch(e){ state.users = state.users||[]; }
+  if(!state.users.length){
+    state.users = [await defaultUser()];
+    persistLocalUsers();
+  }
+}
+function persistLocalUsers(){
+  try{
+    var raw = localStorage.getItem('reconi_fallback_data');
+    var data = raw ? JSON.parse(raw) : {};
+    data.users = state.users;
+    localStorage.setItem('reconi_fallback_data', JSON.stringify(data));
+  }catch(e){}
 }
 
 async function loadLocalFallback(){
@@ -1097,12 +1130,160 @@ function persistLocalFallback(){
   }catch(e){}
 }
 
-/* Generic write helpers that work whether db is live or we fall back to localStorage */
+/* ===================== Supabase row <-> app-object mapping ===================== */
+function companyToRow(c){
+  return {
+    id:c.id, name:c.name, reg_no:c.regNo||'', paye_ref:c.payeRef||'', uif_ref:c.uifRef||'', sdl_ref:c.sdlRef||'',
+    sdl_applicable:!!c.sdlApplicable, pay_day:c.payDay||25, address:c.address||'',
+    default_annual_leave_days:c.defaultAnnualLeaveDays||15, default_sick_leave_days:c.defaultSickLeaveDays||10,
+    default_family_resp_days:c.defaultFamilyRespDays||3, updated_at:new Date().toISOString()
+  };
+}
+function companyFromRow(r){
+  return {
+    id:r.id, name:r.name, regNo:r.reg_no||'', payeRef:r.paye_ref||'', uifRef:r.uif_ref||'', sdlRef:r.sdl_ref||'',
+    sdlApplicable:!!r.sdl_applicable, payDay:r.pay_day||25, address:r.address||'',
+    defaultAnnualLeaveDays:r.default_annual_leave_days, defaultSickLeaveDays:r.default_sick_leave_days,
+    defaultFamilyRespDays:r.default_family_resp_days, createdAt: r.created_at?Date.parse(r.created_at):Date.now()
+  };
+}
+
+var EMPLOYEE_FIELD_MAP = [
+  ['status','status'],['firstName','first_name'],['lastName','last_name'],['idNumber','id_number'],
+  ['dob','dob'],['taxNumber','tax_number'],['uifNumber','uif_number'],['position','position'],
+  ['employeeNo','employee_no'],['startDate','start_date'],['terminationDate','end_date'],['email','email'],
+  ['payFrequency','pay_frequency'],['payCycle','pay_cycle'],['basicSalary','basic_salary'],
+  ['hourlyRate','hourly_rate'],['standardHours','standard_hours'],['travelAllowance','travel_allowance'],
+  ['otherAllowance','other_allowance'],['retirementContribution','retirement_contribution'],
+  ['raContribution','ra_contribution'],['raDeductedFromPay','ra_deducted_from_pay'],
+  ['medicalAidContribution','medical_aid_contribution'],['medicalDependants','medical_dependants'],
+  ['otherDeduction','other_deduction'],['bankName','bank_name'],['accountNumber','account_number'],
+  ['branchCode','branch_code'],['accountType','account_type'],
+  ['annualLeaveDaysPerYear','annual_leave_days_per_year'],['sickLeaveDaysPerYear','sick_leave_days_per_year'],
+  ['familyRespDaysPerYear','family_resp_days_per_year']
+];
+function employeeToRow(e){
+  var row = {id:e.id, company_id:e.companyId, termination_reason:e.terminationReason||'', updated_at:new Date().toISOString()};
+  EMPLOYEE_FIELD_MAP.forEach(function(pair){
+    var v = e[pair[0]];
+    row[pair[1]] = (v===undefined) ? null : v;
+  });
+  return row;
+}
+function employeeFromRow(r){
+  var e = {id:r.id, companyId:r.company_id, terminationReason:r.termination_reason||''};
+  EMPLOYEE_FIELD_MAP.forEach(function(pair){ e[pair[0]] = r[pair[1]]; });
+  return e;
+}
+
+function payrunToRow(p){
+  return {
+    id:p.id, company_id:p.companyId, pay_cycle:p.payCycle, period_month:p.periodMonth, period_year:p.periodYear,
+    period_start:p.periodStart, period_end:p.periodEnd, period_label:p.periodLabel, pay_date:p.payDate,
+    status:p.status, lines:p.lines||[], totals:p.totals||{},
+    finalized_at: p.finalizedAt ? new Date(p.finalizedAt).toISOString() : null,
+    updated_at:new Date().toISOString()
+  };
+}
+function payrunFromRow(r){
+  return {
+    id:r.id, companyId:r.company_id, payCycle:r.pay_cycle, periodMonth:r.period_month, periodYear:r.period_year,
+    periodStart:r.period_start, periodEnd:r.period_end, periodLabel:r.period_label, payDate:r.pay_date,
+    status:r.status, lines:r.lines||[], totals:r.totals||{},
+    finalizedAt: r.finalized_at ? Date.parse(r.finalized_at) : null,
+    createdAt: r.created_at ? Date.parse(r.created_at) : Date.now()
+  };
+}
+
+function leaveToRow(l){
+  return {
+    id:l.id, company_id:l.companyId, employee_id:l.employeeId, type:l.type,
+    start_date:l.startDate, end_date:l.endDate, days:l.days, note:l.note||''
+  };
+}
+function leaveFromRow(r){
+  return {
+    id:r.id, companyId:r.company_id, employeeId:r.employee_id, type:r.type,
+    startDate:r.start_date, endDate:r.end_date, days:r.days, note:r.note||''
+  };
+}
+
+var EMP201_PAYLOAD_FIELDS = ['etiBroughtForward','etiCalculated','etiUtilised','penaltyInterest','prn','filedDate'];
+function emp201ToRow(rec){
+  var payload = {};
+  EMP201_PAYLOAD_FIELDS.forEach(function(k){ payload[k] = rec[k]; });
+  return {
+    id:rec.id, company_id:rec.companyId, period_year:rec.year, period_month:rec.month,
+    payload:payload, updated_at:new Date().toISOString()
+  };
+}
+function emp201FromRow(r){
+  var rec = {id:r.id, companyId:r.company_id, year:r.period_year, month:r.period_month};
+  var payload = r.payload||{};
+  EMP201_PAYLOAD_FIELDS.forEach(function(k){ rec[k] = payload[k]; });
+  return rec;
+}
+
+var EMP501_PAYLOAD_FIELDS = ['submissionRef','filedDate','notes'];
+function emp501ToRow(rec){
+  var payload = {};
+  EMP501_PAYLOAD_FIELDS.forEach(function(k){ payload[k] = rec[k]; });
+  return {
+    id:rec.id, company_id:rec.companyId, period_type:rec.periodType, period_year:rec.periodYear,
+    window_opens:rec.windowOpens||null, window_closes:rec.windowCloses||null,
+    payload:payload, updated_at:new Date().toISOString()
+  };
+}
+function emp501FromRow(r){
+  var rec = {
+    id:r.id, companyId:r.company_id, periodType:r.period_type, periodYear:r.period_year,
+    windowOpens:r.window_opens, windowCloses:r.window_closes
+  };
+  var payload = r.payload||{};
+  EMP501_PAYLOAD_FIELDS.forEach(function(k){ rec[k] = payload[k]; });
+  return rec;
+}
+
+var UIF_PAYLOAD_FIELDS = ['mode','contactName','contactPhone','contactEmail','submittedDate','notes','statusOverrides'];
+function uifToRow(rec){
+  var payload = {};
+  UIF_PAYLOAD_FIELDS.forEach(function(k){ payload[k] = rec[k]; });
+  return {
+    id:rec.id, company_id:rec.companyId, period_year:rec.year, period_month:rec.month,
+    payload:payload, updated_at:new Date().toISOString()
+  };
+}
+function uifFromRow(r){
+  var rec = {id:r.id, companyId:r.company_id, year:r.period_year, month:r.period_month};
+  var payload = r.payload||{};
+  UIF_PAYLOAD_FIELDS.forEach(function(k){ rec[k] = payload[k]; });
+  return rec;
+}
+
+function activityFromRow(r){
+  return {
+    id:r.id, ts:r.created_at?Date.parse(r.created_at):Date.now(), userId:r.user_id, userName:r.user_name,
+    companyId:r.company_id, action:r.action, detail:r.detail||''
+  };
+}
+
+/* Generic write helpers: Supabase when connected, localStorage fallback otherwise */
 async function dbSet(collection, doc){
-  if(db){
+  if(sb && dbReady){
     try{
       setSync('Saving…');
-      await db.doc(collection+'/'+doc.id).set(doc);
+      var row, onConflict, table;
+      if(collection==='companies'){ row = companyToRow(doc); table = 'companies'; }
+      else if(collection==='employees'){ row = employeeToRow(doc); table = 'employees'; }
+      else if(collection==='payruns'){ row = payrunToRow(doc); table = 'pay_runs'; }
+      else if(collection==='leave_requests'){ row = leaveToRow(doc); table = 'leave_requests'; }
+      else if(collection==='emp201'){ row = emp201ToRow(doc); table = 'emp201'; onConflict='company_id,period_year,period_month'; }
+      else if(collection==='emp501'){ row = emp501ToRow(doc); table = 'emp501'; onConflict='company_id,period_type,period_year'; }
+      else if(collection==='uif'){ row = uifToRow(doc); table = 'uif'; onConflict='company_id,period_year,period_month'; }
+      if(row){
+        var res = await sb.from(table).upsert(row, onConflict?{onConflict:onConflict}:undefined);
+        if(res.error) throw res.error;
+      }
       setSync('Saved just now', true);
       return true;
     }catch(e){ console.log('save error', e); setSync('Save failed — retry', false); return false; }
@@ -1112,9 +1293,11 @@ async function dbSet(collection, doc){
   }
 }
 async function dbDelete(collection, id){
-  if(db){
+  if(sb && dbReady){
     try{
-      await db.doc(collection+'/'+id).delete();
+      var table = collection==='payruns' ? 'pay_runs' : collection;
+      var res = await sb.from(table).delete().eq('id', id);
+      if(res.error) throw res.error;
       return true;
     }catch(e){ console.log('delete error', e); return false; }
   }else{
@@ -1136,11 +1319,11 @@ async function saveCompany(doc){ upsertLocal(state.companies, doc); await dbSet(
 async function saveEmployee(doc){ upsertLocal(state.employees, doc); await dbSet('employees', doc); }
 async function savePayrun(doc){ upsertLocal(state.payruns, doc); await dbSet('payruns', doc); }
 async function saveLeave(doc){ upsertLocal(state.leave, doc); await dbSet('leave_requests', doc); }
-async function saveUser(doc){ upsertLocal(state.users, doc); await dbSet('users', doc); }
+async function saveUser(doc){ upsertLocal(state.users, doc); persistLocalUsers(); }
 async function saveEmp201(doc){ upsertLocal(state.emp201, doc); await dbSet('emp201', doc); }
 async function saveEmp501(doc){ upsertLocal(state.emp501, doc); await dbSet('emp501', doc); }
 async function saveUif(doc){ upsertLocal(state.uif, doc); await dbSet('uif', doc); }
-async function deleteUserRec(id){ removeLocal(state.users, id); await dbDelete('users', id); }
+async function deleteUserRec(id){ removeLocal(state.users, id); persistLocalUsers(); }
 /* ---------- Activity / audit log ---------- */
 var AUDIT_LOG_MAX = 500;
 function logActivity(action, detail){
@@ -1153,7 +1336,14 @@ function logActivity(action, detail){
   };
   state.auditLog.unshift(entry);
   if(state.auditLog.length > AUDIT_LOG_MAX) state.auditLog.length = AUDIT_LOG_MAX;
-  dbSet('activity_log', entry).catch(function(){});
+  if(sb && dbReady){
+    sb.from('activity_log').insert({
+      id:entry.id, company_id:entry.companyId, user_id:entry.userId, user_name:entry.userName,
+      action:entry.action, detail:entry.detail
+    }).then(function(res){ if(res.error) console.log('activity log error', res.error); }).catch(function(){});
+  }else{
+    persistLocalFallback();
+  }
   return entry;
 }
 async function deleteLeave(id){ removeLocal(state.leave, id); await dbDelete('leave_requests', id); }
@@ -2431,7 +2621,7 @@ function wireRouteEvents(){
     var periods = emp201Periods();
     var sel = state.routeParam && state.routeParam.year ? state.routeParam : periods[0];
     var rec = emp201Record(sel.year, sel.month) || {
-      id: emp201Id(state.currentCompanyId, sel.year, sel.month),
+      id: uid(),
       companyId: state.currentCompanyId, year: sel.year, month: sel.month
     };
     rec.etiBroughtForward = numVal('e201EtiBf');
@@ -2469,7 +2659,7 @@ function wireRouteEvents(){
     var periodYear = emp501Cache ? emp501Cache.periodYear : null;
     if(periodYear==null) return;
     var rec = emp501Record(periodType, periodYear) || {
-      id: emp501Id(state.currentCompanyId, periodType, periodYear),
+      id: uid(),
       companyId: state.currentCompanyId, periodType: periodType, periodYear: periodYear
     };
     rec.windowOpens = val('e501WindowOpen');
@@ -2502,7 +2692,7 @@ function wireRouteEvents(){
     var month = uifCache ? uifCache.month : null;
     if(year==null) return;
     var rec = uifRecord(year, month) || {
-      id: uifId(state.currentCompanyId, year, month),
+      id: uid(),
       companyId: state.currentCompanyId, year: year, month: month
     };
     rec.mode = val('uifMode');
@@ -2581,18 +2771,15 @@ function wireRouteEvents(){
     state.emp201 = data.emp201||[]; state.emp501 = data.emp501||[]; state.uif = data.uif||[];
     state.auditLog = data.auditLog||[];
     persistLocalFallback();
-    if(db){
+    if(sb && dbReady){
       try{
-        var all = []
-          .concat((state.companies||[]).map(function(d){return {c:'companies',d:d};}))
-          .concat((state.employees||[]).map(function(d){return {c:'employees',d:d};}))
-          .concat((state.payruns||[]).map(function(d){return {c:'payruns',d:d};}))
-          .concat((state.leave||[]).map(function(d){return {c:'leave_requests',d:d};}))
-          .concat((state.users||[]).map(function(d){return {c:'users',d:d};}))
-          .concat((state.emp201||[]).map(function(d){return {c:'emp201',d:d};}))
-          .concat((state.emp501||[]).map(function(d){return {c:'emp501',d:d};}))
-          .concat((state.uif||[]).map(function(d){return {c:'uif',d:d};}));
-        for(var i=0;i<all.length;i++){ await db.doc(all[i].c+'/'+all[i].d.id).set(all[i].d); }
+        for(var i=0;i<state.companies.length;i++) await dbSet('companies', state.companies[i]);
+        for(var i=0;i<state.employees.length;i++) await dbSet('employees', state.employees[i]);
+        for(var i=0;i<state.payruns.length;i++) await dbSet('payruns', state.payruns[i]);
+        for(var i=0;i<state.leave.length;i++) await dbSet('leave_requests', state.leave[i]);
+        for(var i=0;i<state.emp201.length;i++) await dbSet('emp201', state.emp201[i]);
+        for(var i=0;i<state.emp501.length;i++) await dbSet('emp501', state.emp501[i]);
+        for(var i=0;i<state.uif.length;i++) await dbSet('uif', state.uif[i]);
       }catch(err){ console.log('restore sync error', err); }
     }
     logActivity('backup.restore', 'Restored from '+(data.exportedAt||'backup file'));
@@ -3064,7 +3251,7 @@ document.addEventListener('click', function(e){
 });
 
 /* ===================== Boot ===================== */
-initDb();
+checkAuthAndBoot();
 
 })();
 </script>
