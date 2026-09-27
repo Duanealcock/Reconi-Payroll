@@ -1,4 +1,11 @@
-<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body><title>Reconi Payroll</title>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body>
+<title>Reconi Payroll</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Pinyon+Script&display=swap');
 :root{
@@ -425,6 +432,7 @@ tr:last-child td{border-bottom:none;}
 <div id="modal-root"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script>
 (function(){
 "use strict";
@@ -1492,7 +1500,7 @@ function renderEmployees(){
   }).join('');
   return ''
   +'<div class="topbar"><div><h1>Employees</h1><div class="subtitle">Active headcount for '+esc(currentCompany()?currentCompany().name:'')+'</div></div>'
-    +'<div class="topbar-right"><button class="btn" id="importEmpBtn">Import CSV</button> <button class="btn btn-gold" id="addEmpBtn">+ Add employee</button></div></div>'
+    +'<div class="topbar-right"><button class="btn" id="importEmpBtn">Import Excel/CSV</button> <button class="btn btn-gold" id="addEmpBtn">+ Add employee</button></div></div>'
   +'<div class="card"><div class="table-wrap"><table><thead><tr><th>Name</th><th>Employee no.</th><th>Pay</th><th>Cycle</th><th>UIF no.</th><th></th></tr></thead><tbody>'
   +(rows || '<tr><td colspan="6" class="empty-row">No active employees yet. Click "Add employee" to get started.</td></tr>')
   +'</tbody></table></div></div>';
@@ -2921,18 +2929,35 @@ function parseCsv(text){
   });
   return rows;
 }
-function parseEmployeeCsv(text){
-  var rows = parseCsv(text);
+function normalizeDateCell(v){
+  if(v==null) return '';
+  var s = String(v).trim();
+  if(!s) return '';
+  if(/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  var m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if(m){
+    var d = Number(m[1]), mo = Number(m[2]);
+    if(mo>12 && d<=12){ var t=d; d=mo; mo=t; } // handle an accidental mm/dd/yyyy cell
+    return m[3]+'-'+String(mo).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+  }
+  var dt = new Date(s);
+  if(!isNaN(dt.getTime())) return dt.toISOString().slice(0,10);
+  return s;
+}
+function validateEmployeeRows(rows){
   if(!rows.length) return {ok:false, error:'No rows found.'};
-  var header = rows[0].map(function(h){return h.trim().toLowerCase();});
+  var header = rows[0].map(function(h){return String(h==null?'':h).trim().toLowerCase();});
   if(header.length<2 || header[0].indexOf('first')!==0 || header[1].indexOf('last')!==0){
     return {ok:false, error:'First row doesn\'t look like the expected header — download the template and keep its column order (First Name, Last Name, …).'};
   }
   var existingNos = {};
   companyEmployees().forEach(function(e){ if(e.employeeNo) existingNos[e.employeeNo.toLowerCase()]=true; });
   var seenNos = {};
-  var parsed = rows.slice(1).map(function(cells, idx){
-    var get = function(i){ return (cells[i]!=null?cells[i]:'').trim(); };
+  var dataRows = rows.slice(1).filter(function(cells){
+    return (cells||[]).some(function(c){ return String(c==null?'':c).trim()!==''; });
+  });
+  var parsed = dataRows.map(function(cells, idx){
+    var get = function(i){ return String(cells[i]!=null?cells[i]:'').trim(); };
     var errors = [];
     var firstName = get(0), lastName = get(1);
     if(!firstName) errors.push('First name is required');
@@ -2952,7 +2977,7 @@ function parseEmployeeCsv(text){
       data: {
         firstName: firstName, lastName: lastName, idNumber: idNumber,
         taxNumber: get(3), uifNumber: get(4), position: get(5), employeeNo: employeeNo,
-        startDate: get(7) || todayISO(), email: get(8),
+        startDate: normalizeDateCell(get(7)) || todayISO(), email: get(8),
         payCycle: payCycle, payFrequency: payBasis,
         basicSalary: Number(get(11))||0, hourlyRate: Number(get(12))||0, standardHours: Number(get(13))||0,
         travelAllowance: Number(get(14))||0, otherAllowance: Number(get(15))||0,
@@ -2962,18 +2987,39 @@ function parseEmployeeCsv(text){
   });
   return {ok:true, rows:parsed};
 }
+function parseEmployeeCsv(text){
+  return validateEmployeeRows(parseCsv(text));
+}
+function readWorkbookRows(file){
+  return new Promise(function(resolve, reject){
+    if(typeof XLSX==='undefined'){ reject(new Error('Excel support didn\'t load — try again in a moment, or use CSV instead.')); return; }
+    var reader = new FileReader();
+    reader.onerror = function(){ reject(new Error('Could not read that file.')); };
+    reader.onload = function(){
+      try{
+        var wb = XLSX.read(reader.result, {type:'array', cellDates:false});
+        var sheet = wb.Sheets[wb.SheetNames[0]];
+        var rows = XLSX.utils.sheet_to_json(sheet, {header:1, raw:false, defval:''});
+        resolve(rows);
+      }catch(err){ reject(err); }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
 function openImportEmployeesModal(){
   openModal(''
-    +'<h2>Import employees from CSV</h2>'
-    +'<div class="helptext">Paste CSV text or choose a file below. First Name and Last Name are the only required columns — download the template to get the full column order right.</div>'
+    +'<h2>Import employees from Excel or CSV</h2>'
+    +'<div class="helptext">Choose an Excel (.xlsx) or CSV file below, or paste CSV text. First Name and Last Name are the only required columns — download the template to get the full column order right.</div>'
     +'<div class="modal-actions" style="justify-content:flex-start;margin-top:0;"><span class="link-btn" id="downloadEmpTemplateBtn">Download CSV template</span></div>'
-    +'<div class="form-field"><label>CSV file</label><input type="file" id="importCsvFile" accept=".csv,text/csv"></div>'
+    +'<div class="form-field"><label>Excel or CSV file</label><input type="file" id="importCsvFile" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"></div>'
+    +'<div class="helptext" id="importFileStatus"></div>'
     +'<div class="form-field"><label>…or paste CSV text</label><textarea id="importCsvText" rows="5" placeholder="First Name,Last Name,..."></textarea></div>'
     +'<div class="modal-actions" style="justify-content:flex-start;"><button class="btn" id="previewImportBtn">Preview</button></div>'
     +'<div id="importPreviewArea"></div>'
     +'<div class="modal-actions"><button class="btn" id="cancelImportBtn">Cancel</button><button class="btn btn-primary" id="commitImportBtn" disabled>Import valid rows</button></div>'
   );
   var lastParsed = null;
+  var lastFileRows = null;
   document.getElementById('cancelImportBtn').onclick = closeModal;
   document.getElementById('downloadEmpTemplateBtn').onclick = function(){
     var csv = employeeCsvTemplate();
@@ -2984,13 +3030,41 @@ function openImportEmployeesModal(){
   };
   document.getElementById('importCsvFile').addEventListener('change', async function(ev){
     var f = ev.target.files && ev.target.files[0];
-    if(f){ document.getElementById('importCsvText').value = await f.text(); }
+    var status = document.getElementById('importFileStatus');
+    lastFileRows = null;
+    if(!f) return;
+    var isExcel = /\.(xlsx|xls)$/i.test(f.name);
+    if(isExcel){
+      document.getElementById('importCsvText').value = '';
+      document.getElementById('importCsvText').disabled = true;
+      status.textContent = 'Reading '+f.name+'…';
+      try{
+        var rows = await readWorkbookRows(f);
+        lastFileRows = rows;
+        var nonBlankCount = rows.slice(1).filter(function(cells){
+          return (cells||[]).some(function(c){ return String(c==null?'':c).trim()!==''; });
+        }).length;
+        status.textContent = 'Loaded '+f.name+' ('+nonBlankCount+' employee row(s) found) — click Preview.';
+      }catch(err){
+        status.textContent = '';
+        alert(err.message || 'Could not read that Excel file.');
+      }
+    } else {
+      document.getElementById('importCsvText').disabled = false;
+      status.textContent = '';
+      document.getElementById('importCsvText').value = await f.text();
+    }
   });
   document.getElementById('previewImportBtn').onclick = function(){
-    var text = document.getElementById('importCsvText').value;
     var area = document.getElementById('importPreviewArea');
-    if(!text.trim()){ alert('Paste CSV text or choose a file first.'); return; }
-    var result = parseEmployeeCsv(text);
+    var result;
+    if(lastFileRows){
+      result = validateEmployeeRows(lastFileRows);
+    } else {
+      var text = document.getElementById('importCsvText').value;
+      if(!text.trim()){ alert('Choose an Excel/CSV file or paste CSV text first.'); return; }
+      result = parseEmployeeCsv(text);
+    }
     if(!result.ok){
       area.innerHTML = '<div class="integrity-box integrity-warn">! '+esc(result.error)+'</div>';
       document.getElementById('commitImportBtn').disabled = true;
@@ -3003,7 +3077,7 @@ function openImportEmployeesModal(){
       return '<tr><td>'+r.row+'</td><td>'+esc((r.data.firstName+' '+r.data.lastName).trim()||'—')+'</td>'
         +'<td>'+(r.errors.length? '<span style="color:#c0392b">'+esc(r.errors.join('; '))+'</span>' : '<span style="color:#1f9d55">OK</span>')+'</td></tr>';
     }).join('');
-    area.innerHTML = '<div class="helptext">'+validCount+' of '+result.rows.length+' row(s) ready to import'+(validCount<result.rows.length?' — fix and re-paste the rest, or import the valid rows now':'')+'.</div>'
+    area.innerHTML = '<div class="helptext">'+validCount+' of '+result.rows.length+' row(s) ready to import'+(validCount<result.rows.length?' — fix and re-import, or import the valid rows now':'')+'.</div>'
       +'<div class="table-wrap" style="max-height:240px;overflow-y:auto;"><table><thead><tr><th>Row</th><th>Name</th><th>Status</th></tr></thead><tbody>'+rowsHtml+'</tbody></table></div>';
     document.getElementById('commitImportBtn').disabled = validCount===0;
   };
@@ -3015,7 +3089,7 @@ function openImportEmployeesModal(){
       var emp = Object.assign({id:uid(), companyId:state.currentCompanyId, status:'active'}, d);
       await saveEmployee(emp);
     }
-    logActivity('employee.import', validRows.length+' employee(s) imported via CSV');
+    logActivity('employee.import', validRows.length+' employee(s) imported');
     closeModal();
     navigate('employees');
   };
@@ -3252,4 +3326,6 @@ checkAuthAndBoot();
 
 })();
 </script>
-</body></html>
+
+</body>
+</html>
