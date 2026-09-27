@@ -964,7 +964,6 @@ function signOut(){
   state.companies = []; state.employees = []; state.payruns = []; state.leave = [];
   state.emp201 = []; state.emp501 = []; state.uif = []; state.auditLog = [];
   dbReady = false;
-  booted = false;
   showLogin();
   renderSignIn();
   if(sb){ sb.auth.signOut().catch(function(){}); }
@@ -3214,7 +3213,29 @@ function wireStaticEvents(){
   var menu = document.getElementById('companyMenu');
   pill.addEventListener('click', function(e){ e.stopPropagation(); menu.classList.toggle('open'); });
   document.addEventListener('click', function(){ menu.classList.remove('open'); });
-  menu.addEventListener('click', function(e){ e.stopPropagation(); });
+  menu.addEventListener('click', function(e){
+    e.stopPropagation();
+    var item = e.target.closest('.company-menu-item');
+    if(item){
+      state.currentCompanyId = item.dataset.cid;
+      saveLastCompany(state.currentCompanyId);
+      menu.classList.remove('open');
+      navigate(state.route);
+    }
+    var addBtn = e.target.closest('#addCompanyBtn');
+    if(addBtn){
+      var name = prompt('New client company name:');
+      if(name && name.trim()){
+        var nc = defaultCompany(name.trim());
+        saveCompany(nc).then(function(){
+          state.currentCompanyId = nc.id;
+          saveLastCompany(nc.id);
+          menu.classList.remove('open');
+          navigate('company');
+        });
+      }
+    }
+  });
 
   document.getElementById('menuToggle').addEventListener('click', function(){
     document.getElementById('sidebar').classList.add('open');
@@ -3226,30 +3247,6 @@ function closeSidebarMobile(){
   document.getElementById('sidebar').classList.remove('open');
   document.getElementById('scrim').classList.remove('open');
 }
-document.addEventListener('click', function(e){
-  var menu = document.getElementById('companyMenu');
-  if(!menu) return;
-  var item = e.target.closest('.company-menu-item');
-  if(item){
-    state.currentCompanyId = item.dataset.cid;
-    saveLastCompany(state.currentCompanyId);
-    menu.classList.remove('open');
-    navigate(state.route);
-  }
-  var addBtn = e.target.closest('#addCompanyBtn');
-  if(addBtn){
-    var name = prompt('New client company name:');
-    if(name && name.trim()){
-      var nc = defaultCompany(name.trim());
-      saveCompany(nc).then(function(){
-        state.currentCompanyId = nc.id;
-        saveLastCompany(nc.id);
-        navigate('company');
-      });
-    }
-  }
-});
-
 /* ===================== Boot ===================== */
 checkAuthAndBoot();
 
