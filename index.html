@@ -2944,53 +2944,122 @@ function normalizeDateCell(v){
   if(!isNaN(dt.getTime())) return dt.toISOString().slice(0,10);
   return s;
 }
-function validateEmployeeRows(rows){
-  if(!rows.length) return {ok:false, error:'No rows found.'};
-  var header = rows[0].map(function(h){return String(h==null?'':h).trim().toLowerCase();});
-  if(header.length<2 || header[0].indexOf('first')!==0 || header[1].indexOf('last')!==0){
-    return {ok:false, error:'First row doesn\'t look like the expected header — download the template and keep its column order (First Name, Last Name, …).'};
+// Recognize employee columns by name (not fixed position), so we can read
+// the RECONI template AND third-party payroll exports (e.g. SimplePay's
+// bulk-input spreadsheet) whose column order/labels differ from ours.
+function normHeaderKey(s){
+  return String(s==null?'':s).replace(/\(.*?\)/g,'').toLowerCase().replace(/[^a-z0-9]/g,'');
+}
+var EMPLOYEE_FIELD_ALIASES = {
+  firstName: ['firstname','first','firstnames','givenname','givennames'],
+  lastName: ['lastname','last','surname','familyname'],
+  idNumber: ['idnumber','identitynumber','rsaidnumber','nationalid','saidnumber'],
+  taxNumber: ['taxnumber','incometaxnumber','taxno','taxreferencenumber','taxref'],
+  uifNumber: ['uifnumber','uifno','uif'],
+  position: ['jobtitle','position','role','designation','occupation'],
+  employeeNo: ['employeenumber','employeeno','empno','staffnumber','payrollnumber','number','employeecode','empcode'],
+  startDate: ['startdate','dateofappointment','appointmentdate','employmentdate','commencementdate','hiredate'],
+  email: ['email','emailaddress'],
+  payCycle: ['paycycle','payfrequencycycle'],
+  payFrequency: ['paybasis','paymentbasis'],
+  basicSalary: ['basicpayperperiod','basicsalary','basicpay','salary','monthlysalary'],
+  hourlyRate: ['hourlyrate','rateperhour'],
+  standardHours: ['standardhours','hoursperweek','normalhours'],
+  travelAllowance: ['travelallowance','travelallow'],
+  otherAllowance: ['otherallowance','otherallow'],
+  bankName: ['bankname','bank','bankaccountbankid'],
+  accountNumber: ['accountnumber','bankaccountaccountnumber','accno'],
+  branchCode: ['branchcode','bankaccountbranchcode','bankbranchcode']
+};
+function scoreHeaderRow(row){
+  var colMap = {};
+  (row||[]).forEach(function(cell, idx){
+    var key = normHeaderKey(cell);
+    if(!key) return;
+    for(var field in EMPLOYEE_FIELD_ALIASES){
+      if(colMap[field]!=null) continue; // first matching column for a field wins
+      if(EMPLOYEE_FIELD_ALIASES[field].indexOf(key)!==-1){ colMap[field]=idx; break; }
+    }
+  });
+  return colMap;
+}
+// Scans every sheet for the row that best looks like an employee header
+// (must include First Name and/or Last Name). Prefers the row with the
+// most recognized columns; on a tie, prefers the later row, since export
+// templates often put machine-readable/category rows above the real
+// human-readable header that sits right before the data.
+function findEmployeeHeader(sheets){
+  var best = null;
+  (sheets||[]).forEach(function(sheet, sIdx){
+    var rows = sheet.rows||[];
+    var scanLimit = Math.min(rows.length, 30);
+    for(var r=0;r<scanLimit;r++){
+      var colMap = scoreHeaderRow(rows[r]);
+      var fieldCount = Object.keys(colMap).length;
+      var hasName = colMap.firstName!=null || colMap.lastName!=null;
+      if(fieldCount>=2 && hasName && (!best || fieldCount>=best.fieldCount)){
+        best = {sheetIndex:sIdx, sheetName:sheet.name, rowIndex:r, colMap:colMap, fieldCount:fieldCount};
+      }
+    }
+  });
+  return best;
+}
+function validateEmployeeSheets(sheets){
+  var header = findEmployeeHeader(sheets);
+  if(!header){
+    return {ok:false, error:'Couldn\'t find a recognizable header row (with First Name and/or Last Name) in this file — download the template and match its columns, or check the sheet with the employee data.'};
   }
+  var sheet = sheets[header.sheetIndex];
+  var rows = sheet.rows||[];
+  var colMap = header.colMap;
+  var get = function(cells, field){
+    var idx = colMap[field];
+    if(idx==null) return '';
+    return String(cells[idx]!=null?cells[idx]:'').trim();
+  };
   var existingNos = {};
   companyEmployees().forEach(function(e){ if(e.employeeNo) existingNos[e.employeeNo.toLowerCase()]=true; });
   var seenNos = {};
-  var dataRows = rows.slice(1).filter(function(cells){
+  var dataRows = rows.slice(header.rowIndex+1).filter(function(cells){
     return (cells||[]).some(function(c){ return String(c==null?'':c).trim()!==''; });
   });
   var parsed = dataRows.map(function(cells, idx){
-    var get = function(i){ return String(cells[i]!=null?cells[i]:'').trim(); };
     var errors = [];
-    var firstName = get(0), lastName = get(1);
+    var firstName = get(cells,'firstName'), lastName = get(cells,'lastName');
     if(!firstName) errors.push('First name is required');
-    var payCycle = (get(9)||'monthly').toLowerCase();
+    var payCycle = (get(cells,'payCycle')||'monthly').toLowerCase();
     if(!PAY_CYCLES[payCycle]){ errors.push('Pay cycle must be monthly, fortnightly or weekly'); payCycle='monthly'; }
-    var payBasis = (get(10)||'monthly').toLowerCase()==='hourly' ? 'hourly' : 'monthly';
-    var idNumber = get(2);
+    var payBasis = (get(cells,'payFrequency')||'monthly').toLowerCase()==='hourly' ? 'hourly' : 'monthly';
+    var idNumber = get(cells,'idNumber');
     if(idNumber && /^\d{13}$/.test(idNumber) && !saIdCheckDigitValid(idNumber)) errors.push('ID number fails the SA ID check-digit test');
-    var employeeNo = get(6);
+    var employeeNo = get(cells,'employeeNo');
     if(employeeNo){
       var key = employeeNo.toLowerCase();
       if(existingNos[key] || seenNos[key]) errors.push('Employee number already in use');
       seenNos[key]=true;
     }
     return {
-      row: idx+2, errors: errors,
+      row: idx+header.rowIndex+2, errors: errors,
       data: {
         firstName: firstName, lastName: lastName, idNumber: idNumber,
-        taxNumber: get(3), uifNumber: get(4), position: get(5), employeeNo: employeeNo,
-        startDate: normalizeDateCell(get(7)) || todayISO(), email: get(8),
+        taxNumber: get(cells,'taxNumber'), uifNumber: get(cells,'uifNumber'), position: get(cells,'position'), employeeNo: employeeNo,
+        startDate: normalizeDateCell(get(cells,'startDate')) || todayISO(), email: get(cells,'email'),
         payCycle: payCycle, payFrequency: payBasis,
-        basicSalary: Number(get(11))||0, hourlyRate: Number(get(12))||0, standardHours: Number(get(13))||0,
-        travelAllowance: Number(get(14))||0, otherAllowance: Number(get(15))||0,
-        bankName: get(16), accountNumber: get(17), branchCode: get(18)
+        basicSalary: Number(get(cells,'basicSalary'))||0, hourlyRate: Number(get(cells,'hourlyRate'))||0, standardHours: Number(get(cells,'standardHours'))||0,
+        travelAllowance: Number(get(cells,'travelAllowance'))||0, otherAllowance: Number(get(cells,'otherAllowance'))||0,
+        bankName: get(cells,'bankName'), accountNumber: get(cells,'accountNumber'), branchCode: get(cells,'branchCode')
       }
     };
   });
-  return {ok:true, rows:parsed};
+  return {ok:true, rows:parsed, sheetName: sheet.name, sheetCount: sheets.length};
+}
+function validateEmployeeRows(rows){
+  return validateEmployeeSheets([{name:'CSV', rows:rows||[]}]);
 }
 function parseEmployeeCsv(text){
   return validateEmployeeRows(parseCsv(text));
 }
-function readWorkbookRows(file){
+function readWorkbookSheets(file){
   return new Promise(function(resolve, reject){
     if(typeof XLSX==='undefined'){ reject(new Error('Excel support didn\'t load — try again in a moment, or use CSV instead.')); return; }
     var reader = new FileReader();
@@ -2998,9 +3067,12 @@ function readWorkbookRows(file){
     reader.onload = function(){
       try{
         var wb = XLSX.read(reader.result, {type:'array', cellDates:false});
-        var sheet = wb.Sheets[wb.SheetNames[0]];
-        var rows = XLSX.utils.sheet_to_json(sheet, {header:1, raw:false, defval:''});
-        resolve(rows);
+        var sheets = wb.SheetNames.map(function(name){
+          var sheet = wb.Sheets[name];
+          var rows = XLSX.utils.sheet_to_json(sheet, {header:1, raw:false, defval:''});
+          return {name:name, rows:rows};
+        });
+        resolve(sheets);
       }catch(err){ reject(err); }
     };
     reader.readAsArrayBuffer(file);
@@ -3009,7 +3081,7 @@ function readWorkbookRows(file){
 function openImportEmployeesModal(){
   openModal(''
     +'<h2>Import employees from Excel or CSV</h2>'
-    +'<div class="helptext">Choose an Excel (.xlsx) or CSV file below, or paste CSV text. First Name and Last Name are the only required columns — download the template to get the full column order right.</div>'
+    +'<div class="helptext">Choose an Excel (.xlsx) or CSV file below, or paste CSV text. Works with the RECONI template or most other payroll exports — matching columns (First Name, Last Name, ID Number, etc.) are detected automatically, in any order, on any sheet.</div>'
     +'<div class="modal-actions" style="justify-content:flex-start;margin-top:0;"><span class="link-btn" id="downloadEmpTemplateBtn">Download CSV template</span></div>'
     +'<div class="form-field"><label>Excel or CSV file</label><input type="file" id="importCsvFile" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"></div>'
     +'<div class="helptext" id="importFileStatus"></div>'
@@ -3019,7 +3091,7 @@ function openImportEmployeesModal(){
     +'<div class="modal-actions"><button class="btn" id="cancelImportBtn">Cancel</button><button class="btn btn-primary" id="commitImportBtn" disabled>Import valid rows</button></div>'
   );
   var lastParsed = null;
-  var lastFileRows = null;
+  var lastSheets = null;
   document.getElementById('cancelImportBtn').onclick = closeModal;
   document.getElementById('downloadEmpTemplateBtn').onclick = function(){
     var csv = employeeCsvTemplate();
@@ -3031,7 +3103,7 @@ function openImportEmployeesModal(){
   document.getElementById('importCsvFile').addEventListener('change', async function(ev){
     var f = ev.target.files && ev.target.files[0];
     var status = document.getElementById('importFileStatus');
-    lastFileRows = null;
+    lastSheets = null;
     if(!f) return;
     var isExcel = /\.(xlsx|xls)$/i.test(f.name);
     if(isExcel){
@@ -3039,12 +3111,18 @@ function openImportEmployeesModal(){
       document.getElementById('importCsvText').disabled = true;
       status.textContent = 'Reading '+f.name+'…';
       try{
-        var rows = await readWorkbookRows(f);
-        lastFileRows = rows;
-        var nonBlankCount = rows.slice(1).filter(function(cells){
-          return (cells||[]).some(function(c){ return String(c==null?'':c).trim()!==''; });
-        }).length;
-        status.textContent = 'Loaded '+f.name+' ('+nonBlankCount+' employee row(s) found) — click Preview.';
+        var sheets = await readWorkbookSheets(f);
+        lastSheets = sheets;
+        var header = findEmployeeHeader(sheets);
+        if(header){
+          var dataCount = sheets[header.sheetIndex].rows.slice(header.rowIndex+1).filter(function(cells){
+            return (cells||[]).some(function(c){ return String(c==null?'':c).trim()!==''; });
+          }).length;
+          var sheetNote = sheets.length>1 ? (' — sheet "'+header.sheetName+'"') : '';
+          status.textContent = 'Loaded '+f.name+sheetNote+' ('+dataCount+' employee row(s) found) — click Preview.';
+        } else {
+          status.textContent = 'Loaded '+f.name+', but couldn\'t find a recognizable employee header row in '+(sheets.length>1?'any of its '+sheets.length+' sheets':'it')+' — click Preview for details.';
+        }
       }catch(err){
         status.textContent = '';
         alert(err.message || 'Could not read that Excel file.');
@@ -3058,8 +3136,8 @@ function openImportEmployeesModal(){
   document.getElementById('previewImportBtn').onclick = function(){
     var area = document.getElementById('importPreviewArea');
     var result;
-    if(lastFileRows){
-      result = validateEmployeeRows(lastFileRows);
+    if(lastSheets){
+      result = validateEmployeeSheets(lastSheets);
     } else {
       var text = document.getElementById('importCsvText').value;
       if(!text.trim()){ alert('Choose an Excel/CSV file or paste CSV text first.'); return; }
@@ -3077,7 +3155,8 @@ function openImportEmployeesModal(){
       return '<tr><td>'+r.row+'</td><td>'+esc((r.data.firstName+' '+r.data.lastName).trim()||'—')+'</td>'
         +'<td>'+(r.errors.length? '<span style="color:#c0392b">'+esc(r.errors.join('; '))+'</span>' : '<span style="color:#1f9d55">OK</span>')+'</td></tr>';
     }).join('');
-    area.innerHTML = '<div class="helptext">'+validCount+' of '+result.rows.length+' row(s) ready to import'+(validCount<result.rows.length?' — fix and re-import, or import the valid rows now':'')+'.</div>'
+    var sheetLine = (result.sheetCount>1) ? (' (from sheet "'+esc(result.sheetName)+'")') : '';
+    area.innerHTML = '<div class="helptext">'+validCount+' of '+result.rows.length+' row(s) ready to import'+sheetLine+(validCount<result.rows.length?' — fix and re-import, or import the valid rows now':'')+'.</div>'
       +'<div class="table-wrap" style="max-height:240px;overflow-y:auto;"><table><thead><tr><th>Row</th><th>Name</th><th>Status</th></tr></thead><tbody>'+rowsHtml+'</tbody></table></div>';
     document.getElementById('commitImportBtn').disabled = validCount===0;
   };
