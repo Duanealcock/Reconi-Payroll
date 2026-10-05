@@ -2036,7 +2036,7 @@ async function saveBillingSettings(){
   return true;
 }
 function currentMonthKey(){ return todayISO().slice(0,7); }
-function monthLabel(key){
+function billingMonthLabel(key){
   var p = key.split('-'); var names=['January','February','March','April','May','June','July','August','September','October','November','December'];
   return names[(Number(p[1])||1)-1]+' '+p[0];
 }
@@ -2119,7 +2119,7 @@ function renderBilling(){
   }).join('');
   var cols = s.showVat ? 7 : 6;
   return ''
-  +'<div class="topbar"><div><h1>Billing</h1><div class="subtitle">Companies and active employees per company for '+esc(monthLabel(month))+'</div></div>'
+  +'<div class="topbar"><div><h1>Billing</h1><div class="subtitle">Companies and active employees per company for '+esc(billingMonthLabel(month))+'</div></div>'
     +'<div class="topbar-right"><input type="month" id="billMonth" value="'+esc(month)+'" style="padding:7px 9px;border:1px solid var(--border);border-radius:8px;">'
     +'<button class="btn" id="billRateBtn">Rate card</button>'
     +'<button class="btn btn-primary" id="billCsvBtn">Export CSV</button></div></div>'
