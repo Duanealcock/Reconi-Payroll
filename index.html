@@ -460,10 +460,11 @@ function fmtZAR(n){
   return (neg?'-':'') + 'R' + parts[0] + ',' + parts[1];
 }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
-function todayISO(){ return new Date().toISOString().slice(0,10); }
+function localISO(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function todayISO(){ return localISO(new Date()); }
 function monthLabel(y,m){ return new Date(y, m-1, 1).toLocaleDateString('en-ZA',{month:'long',year:'numeric'}); }
 function fmtDateShort(dateStr){ return dateStr ? new Date(dateStr+'T00:00:00').toLocaleDateString('en-ZA',{day:'numeric',month:'short',year:'numeric'}) : '—'; }
-function addDaysISO(dateStr, days){ var d = new Date(dateStr+'T00:00:00'); d.setDate(d.getDate()+days); return d.toISOString().slice(0,10); }
+function addDaysISO(dateStr, days){ var d = new Date(dateStr+'T00:00:00'); d.setDate(d.getDate()+days); return localISO(d); }
 function ageFromDOB(dob){
   if(!dob) return null;
   var d = new Date(dob), t = new Date();
@@ -572,9 +573,22 @@ function calcPayslipLine(emp, company, extra){
   extra = extra || {};
   var periodsPerYear = periodsPerYearOf(emp);
   var isHourly = emp.payFrequency==='hourly';
+  var normalHours = isHourly ? (Number(extra.normalHours)>0 ? Number(extra.normalHours) : (Number(emp.standardHours)||160)) : 0;
   var basic = isHourly
-    ? (Number(emp.hourlyRate)||0) * (Number(emp.standardHours)||160)
+    ? (Number(emp.hourlyRate)||0) * normalHours
     : (Number(emp.basicSalary)||0);
+  var hnum = function(v){ return Math.max(0, Number(v)||0); };
+  var sundayEntries = (extra.sundayEntries||[]).filter(function(e){ return hnum(e.hours)>0; }).map(function(e){ return {date:e.date, hours:hnum(e.hours)}; });
+  var holidayEntries = (extra.holidayEntries||[]).filter(function(e){ return hnum(e.hours)>0 || hnum(e.overtimeHours)>0; })
+    .map(function(e){ return {date:e.date, hours:hnum(e.hours), overtimeHours:hnum(e.overtimeHours)}; });
+  var weekdayOvertimeHours = hnum(extra.overtimeHours);
+  var sumOf = function(arr,k){ return Math.round(arr.reduce(function(s,e){return s+e[k];},0)*100)/100; };
+  if(extra.sundayEntries) extra = Object.assign({}, extra, {sundayHours: sumOf(sundayEntries,'hours')});
+  if(extra.holidayEntries) extra = Object.assign({}, extra, {
+    publicHolidayHours: sumOf(holidayEntries,'hours'),
+    overtimeHours: (Number(extra.overtimeHours)||0) + sumOf(holidayEntries,'overtimeHours')
+  });
+
   var dr = defaultPremiumRates(emp);
   var rate = ordinaryHourlyRate(emp);
   var prem = function(hoursKey, rateKey, dflt){
@@ -621,7 +635,9 @@ function calcPayslipLine(emp, company, extra){
   return {
     employeeId: emp.id, employeeName: (emp.firstName+' '+emp.lastName).trim(),
     payCycle: payCycleOf(emp),
-    basic: basic, overtimeHours: overtimeHours, overtimeRate: overtimeRate, overtimePay: overtimePay,
+    basic: basic, normalHours: normalHours, weekdayOvertimeHours: weekdayOvertimeHours,
+    sundayEntries: sundayEntries, holidayEntries: holidayEntries,
+    overtimeHours: overtimeHours, overtimeRate: overtimeRate, overtimePay: overtimePay,
     sundayHours: sundayHours, sundayRate: sundayRate, sundayPay: sundayPay,
     publicHolidayHours: publicHolidayHours, publicHolidayRate: publicHolidayRate, publicHolidayPay: publicHolidayPay,
     hourlyRateUsed: rate,
@@ -3429,7 +3445,7 @@ function normalizeDateCell(v){
     return m[3]+'-'+String(mo).padStart(2,'0')+'-'+String(d).padStart(2,'0');
   }
   var dt = new Date(s);
-  if(!isNaN(dt.getTime())) return dt.toISOString().slice(0,10);
+  if(!isNaN(dt.getTime())) return localISO(dt);
   return s;
 }
 // Recognize employee columns by name (not fixed position), so we can read
@@ -3706,6 +3722,52 @@ function openLeaveModal(employeeId){
   };
 }
 
+
+/* ---------- South African public holidays + dated premium-hour helpers ---------- */
+function easterSunday(year){
+  var a=year%19, b=Math.floor(year/100), c=year%100, d=Math.floor(b/4), e=b%4, f=Math.floor((b+8)/25), g=Math.floor((b-f+1)/3);
+  var h=(19*a+b-d-g+15)%30, i=Math.floor(c/4), k=c%4, l=(32+2*e+2*i-h-k)%7, m=Math.floor((a+11*h+22*l)/451);
+  var month=Math.floor((h+l-7*m+114)/31), day=((h+l-7*m+114)%31)+1;
+  return year+'-'+String(month).padStart(2,'0')+'-'+String(day).padStart(2,'0');
+}
+function isoDow(dateStr){ return new Date(dateStr+'T00:00:00Z').getUTCDay(); }   // 0 = Sunday
+function isoAddDays(dateStr, n){ var d = new Date(dateStr+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()+n); return d.toISOString().slice(0,10); }
+/* Public Holidays Act: a holiday that falls on a Sunday moves to the Monday as well. */
+function saPublicHolidays(year){
+  var easter = easterSunday(year);
+  var list = [
+    [year+'-01-01','New Year\'s Day'], [year+'-03-21','Human Rights Day'],
+    [isoAddDays(easter,-2),'Good Friday'], [isoAddDays(easter,1),'Family Day'],
+    [year+'-04-27','Freedom Day'], [year+'-05-01','Workers\' Day'], [year+'-06-16','Youth Day'],
+    [year+'-08-09','National Women\'s Day'], [year+'-09-24','Heritage Day'],
+    [year+'-12-16','Day of Reconciliation'], [year+'-12-25','Christmas Day'], [year+'-12-26','Day of Goodwill']
+  ];
+  var out = list.map(function(x){ return {date:x[0], name:x[1]}; });
+  list.forEach(function(x){
+    if(isoDow(x[0])===0) out.push({date:isoAddDays(x[0],1), name:x[1]+' (observed)'});
+  });
+  return out.sort(function(a,b){ return a.date<b.date?-1:a.date>b.date?1:0; });
+}
+function periodBoundsOfRun(r){
+  var s = r.periodStart, e = r.periodEnd;
+  if(!s || !e){
+    var y = Number(r.periodYear), m = Number(r.periodMonth);
+    s = y+'-'+String(m).padStart(2,'0')+'-01';
+    e = y+'-'+String(m).padStart(2,'0')+'-'+String(new Date(y, m, 0).getDate()).padStart(2,'0');
+  }
+  return {start:s, end:e};
+}
+/* Sundays (not already a public holiday) and public holidays falling inside a pay period. */
+function datedDaysInPeriod(start, end){
+  var holidays = [];
+  for(var y=Number(start.slice(0,4)); y<=Number(end.slice(0,4)); y++) holidays = holidays.concat(saPublicHolidays(y));
+  holidays = holidays.filter(function(h){ return h.date>=start && h.date<=end; });
+  var holSet = {}; holidays.forEach(function(h){ holSet[h.date]=1; });
+  var sundays = [];
+  for(var d=start; d<=end; d=isoAddDays(d,1)){ if(isoDow(d)===0 && !holSet[d]) sundays.push(d); }
+  return {sundays:sundays, holidays:holidays};
+}
+
 function openOvertimeModal(runId, employeeId){
   var r = state.payruns.find(function(x){return x.id===runId;});
   var line = r && r.lines.find(function(l){return l.employeeId===employeeId;});
@@ -3714,42 +3776,91 @@ function openOvertimeModal(runId, employeeId){
   var dr = defaultPremiumRates(emp);
   var rate = ordinaryHourlyRate(emp);
   var isMonthly = emp.payFrequency!=='hourly';
+  var bounds = periodBoundsOfRun(r);
+  var days = datedDaysInPeriod(bounds.start, bounds.end);
+  var fmtD = function(d){ var p=d.split('-'); return d; };
+  var savedSun = {}; (line.sundayEntries||[]).forEach(function(e){ savedSun[e.date] = e.hours; });
+  if(!(line.sundayEntries||[]).length && Number(line.sundayHours)>0 && days.sundays.length) savedSun[days.sundays[0]] = line.sundayHours;   // older, undated entry
+  var savedHol = {}; (line.holidayEntries||[]).forEach(function(e){ savedHol[e.date] = e; });
+  if(!(line.holidayEntries||[]).length && (Number(line.publicHolidayHours)>0) && days.holidays.length) savedHol[days.holidays[0].date] = {date:days.holidays[0].date, hours:line.publicHolidayHours, overtimeHours:0};
+  var autoHolDates = {}; days.holidays.forEach(function(h){ autoHolDates[h.date]=1; });
+  var extraHol = Object.keys(savedHol).filter(function(d){ return !autoHolDates[d]; }).sort();
+  var weekdayOT = line.weekdayOvertimeHours!=null ? line.weekdayOvertimeHours : line.overtimeHours;
+  var rowStyle = 'display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:center;margin-bottom:8px;';
+  var lbl = function(t){ return '<div style="font-size:13px;font-weight:600;color:var(--text);">'+t+'</div>'; };
+  var inp = function(cls, d, v, extraAttr){ return '<input type="number" min="0" step="0.1" class="'+cls+'" data-date="'+esc(d)+'" value="'+(v?v:'')+'" placeholder="0.0" '+(extraAttr||'')+'>'; };
+  var head = function(t){ return '<div style="font-size:13px;font-weight:700;color:#2454a8;margin:16px 0 8px;">'+t+'</div>'; };
+  var sundayRows = days.sundays.map(function(d){
+    return '<div style="'+rowStyle+'">'+lbl('Sunday '+fmtD(d))+inp('otSun', d, savedSun[d])+'</div>';
+  }).join('') || '<div class="helptext">No Sundays fall in this pay period.</div>';
+  var holRow = function(date, name, saved, custom){
+    return '<div data-hol-row="'+esc(date)+'"'+(custom?' data-custom="1"':'')+'>'
+      +head((custom?'Extra day ':'Holiday ')+fmtD(date)+(name?' — '+esc(name):''))
+      +'<div style="'+rowStyle+'">'+lbl('Hours worked')+inp('otHolH', date, saved&&saved.hours)+'</div>'
+      +'<div style="'+rowStyle+'">'+lbl('Overtime hours')+inp('otHolO', date, saved&&saved.overtimeHours)+'</div></div>';
+  };
+  var holidayRows = days.holidays.map(function(h){ return holRow(h.date, h.name, savedHol[h.date], false); }).join('')
+    + extraHol.map(function(d){ return holRow(d, '', savedHol[d], true); }).join('');
   openModal(''
-    +'<h2>Overtime, Sunday &amp; public holiday hours — '+esc(emp.firstName+' '+emp.lastName)+'</h2>'
-    +'<div class="helptext">Ordinary hourly rate used: <b>'+fmtZAR(rate)+'/hr</b>'
+    +'<h2>Hours worked — '+esc(emp.firstName+' '+emp.lastName)+'</h2>'
+    +'<div class="helptext">'+esc(r.periodLabel||'')+' ('+esc(bounds.start)+' to '+esc(bounds.end)+'). Ordinary hourly rate used: <b>'+fmtZAR(rate)+'/hr</b>'
       +(isMonthly?' (monthly pay ÷ '+(Number(emp.standardHours)>0?Number(emp.standardHours):Math.round(45*52/periodsPerYearOf(emp)*100)/100)+' hours in the period)':'')
-      +'. Enter the hours worked this pay period and the pay multiplier for each type; the multipliers below are the BCEA defaults and can be changed to match the employment contract, bargaining council or sectoral determination.</div>'
-    +'<div class="form-grid">'
-      +field('Overtime hours','oHours',line.overtimeHours||0,'number')
-      +field('Overtime multiplier (BCEA default 1.5x)','oRate',line.overtimeRate||dr.overtime,'number')
-      +field('Sunday hours','sHours',line.sundayHours||0,'number')
-      +field('Sunday multiplier (2x if not ordinarily working Sundays, 1.5x if they do)','sRate',line.sundayRate||dr.sunday,'number')
-      +field('Public holiday hours worked','pHours',line.publicHolidayHours||0,'number')
-      +field('Public holiday multiplier ('+(isMonthly?'1x top-up on top of the monthly salary, which already covers the holiday':'2x for hourly-paid staff')+')','pRate',line.publicHolidayRate||dr.publicHoliday,'number')
-    +'</div>'
+      +'. Enter the hours for each date; the multipliers are the BCEA defaults and can be changed to match the contract, bargaining council or sectoral determination.</div>'
+    +(isMonthly ? '' : '<div style="'+rowStyle+'">'+lbl('Normal hours')+'<input type="number" min="0" step="0.1" id="oNormal" value="'+esc(line.normalHours||emp.standardHours||'')+'" placeholder="'+esc(emp.standardHours||160)+'"></div>')
+    +'<div style="'+rowStyle+'">'+lbl('Overtime hours (weekdays / Saturdays)')+'<input type="number" min="0" step="0.1" id="oHours" value="'+(weekdayOT?weekdayOT:'')+'" placeholder="0.0"></div>'
+    +'<div style="'+rowStyle+'">'+lbl('Overtime multiplier (BCEA default 1.5x)')+'<input type="number" min="0" step="0.05" id="oRate" value="'+(line.overtimeRate||dr.overtime)+'"></div>'
+    +head('Sundays in this period')
+    +sundayRows
+    +'<div style="'+rowStyle+'">'+lbl('Sunday multiplier (2x normally, 1.5x if Sundays are ordinary working days)')+'<input type="number" min="0" step="0.05" id="sRate" value="'+(line.sundayRate||dr.sunday)+'"></div>'
+    +holidayRows
+    +'<div style="margin-top:10px;"><span class="link-btn" id="otAddDay">+ Add another date (e.g. election day)</span></div>'
+    +'<div style="'+rowStyle+'margin-top:12px;">'+lbl('Public holiday multiplier ('+(isMonthly?'1x top-up on top of the monthly salary, which already covers the holiday':'2x for hourly-paid staff')+')')+'<input type="number" min="0" step="0.05" id="pRate" value="'+(line.publicHolidayRate||dr.publicHoliday)+'"></div>'
     +'<div id="otPreview" class="stat-caption" style="margin-top:10px;"></div>'
-    +'<div class="helptext" style="margin-top:8px;">BCEA limits: overtime by agreement only, normally no more than 3 hours a day or 10 hours a week, and overtime/Sunday/public-holiday rules apply to employees below the BCEA earnings threshold. Premium pay is included in gross pay, so PAYE, UIF and SDL are calculated on it.</div>'
+    +'<div class="helptext" style="margin-top:8px;">Overtime on a public holiday is paid at the overtime multiplier, on top of the holiday hours. BCEA limits: overtime by agreement only, normally no more than 3 hours a day or 10 hours a week; overtime/Sunday/public-holiday rules apply to employees below the BCEA earnings threshold. Premium pay is included in gross pay, so PAYE, UIF and SDL are calculated on it.</div>'
     +'<div class="modal-actions"><button class="btn" id="cancelOvertimeBtn">Cancel</button><button class="btn btn-primary" id="saveOvertimeBtn">Save hours</button></div>'
   );
   function readExtra(){
-    return {
+    var sundayEntries = [], holMap = {};
+    document.querySelectorAll('.otSun').forEach(function(el){ sundayEntries.push({date:el.dataset.date, hours:Number(el.value)||0}); });
+    document.querySelectorAll('[data-hol-row]').forEach(function(row){
+      var d = row.dataset.holRow;
+      var h = row.querySelector('.otHolH'), o = row.querySelector('.otHolO');
+      var dateEl = row.querySelector('.otHolDate');
+      var date = dateEl ? dateEl.value : d;
+      if(!date) return;
+      holMap[date] = {date:date, hours:Number(h.value)||0, overtimeHours:Number(o.value)||0};
+    });
+    var out = {
       overtimeHours:numVal('oHours'), overtimeRate:numVal('oRate'),
-      sundayHours:numVal('sHours'), sundayRate:numVal('sRate'),
-      publicHolidayHours:numVal('pHours'), publicHolidayRate:numVal('pRate')
+      sundayRate:numVal('sRate'), publicHolidayRate:numVal('pRate'),
+      sundayEntries:sundayEntries, holidayEntries:Object.keys(holMap).map(function(k){return holMap[k];})
     };
+    var nEl = document.getElementById('oNormal'); if(nEl) out.normalHours = Number(nEl.value)||0;
+    return out;
   }
   function refreshPreview(){
     var l = calcPayslipLine(emp, currentCompany(), readExtra());
     var el = document.getElementById('otPreview');
     if(!el) return;
-    el.innerHTML = 'Overtime '+fmtZAR(l.overtimePay)+' · Sunday '+fmtZAR(l.sundayPay)+' · Public holiday '+fmtZAR(l.publicHolidayPay)
+    el.innerHTML = 'Overtime '+l.overtimeHours+'h = '+fmtZAR(l.overtimePay)+' · Sunday '+l.sundayHours+'h = '+fmtZAR(l.sundayPay)+' · Public holiday '+l.publicHolidayHours+'h = '+fmtZAR(l.publicHolidayPay)
       +' → new gross <b>'+fmtZAR(l.gross)+'</b>, net pay <b>'+fmtZAR(l.netPay)+'</b>';
   }
-  ['oHours','oRate','sHours','sRate','pHours','pRate'].forEach(function(id){
-    var el = document.getElementById(id);
-    if(el) el.addEventListener('input', refreshPreview);
-  });
+  function wirePreview(root){
+    root.querySelectorAll('input').forEach(function(el){ el.addEventListener('input', refreshPreview); });
+  }
+  wirePreview(document.getElementById('modal-root'));
   refreshPreview();
+  document.getElementById('otAddDay').onclick = function(){
+    var wrap = document.createElement('div');
+    wrap.setAttribute('data-hol-row','new'+Date.now()); wrap.setAttribute('data-custom','1');
+    wrap.innerHTML = head('Extra day')
+      +'<div style="'+rowStyle+'">'+lbl('Date')+'<input type="date" class="otHolDate" min="'+esc(bounds.start)+'" max="'+esc(bounds.end)+'"></div>'
+      +'<div style="'+rowStyle+'">'+lbl('Hours worked')+'<input type="number" min="0" step="0.1" class="otHolH" placeholder="0.0"></div>'
+      +'<div style="'+rowStyle+'">'+lbl('Overtime hours')+'<input type="number" min="0" step="0.1" class="otHolO" placeholder="0.0"></div>';
+    var add = document.getElementById('otAddDay').parentNode;
+    add.parentNode.insertBefore(wrap, add);
+    wirePreview(wrap);
+  };
   document.getElementById('cancelOvertimeBtn').onclick = closeModal;
   document.getElementById('saveOvertimeBtn').onclick = async function(){
     var extra = readExtra();
@@ -3761,7 +3872,7 @@ function openOvertimeModal(runId, employeeId){
       t.gross+=l.gross; t.paye+=l.paye; t.uifEmployee+=l.uifEmployee; t.uifEmployer+=l.uifEmployer;
       t.sdlEmployer+=l.sdlEmployer; t.netPay+=l.netPay; t.employerCost+=l.employerCost; return t;
     }, {gross:0,paye:0,uifEmployee:0,uifEmployer:0,sdlEmployer:0,netPay:0,employerCost:0});
-    await savePayrun(r);
+    var okSave = await savePayrun(r);
     logActivity('payrun.overtime', emp.firstName+' '+emp.lastName+' — OT '+newLine.overtimeHours+'h @ '+newLine.overtimeRate+'x, Sun '+newLine.sundayHours+'h @ '+newLine.sundayRate+'x, PH '+newLine.publicHolidayHours+'h @ '+newLine.publicHolidayRate+'x on '+r.periodLabel);
     closeModal();
     renderCustom();
@@ -3818,7 +3929,7 @@ function openNewRunModal(){
     if(cycleKey==='monthly'){
       periodMonth = Number(val('rMonth')); periodYear = numVal('rYear');
       periodStart = periodYear+'-'+String(periodMonth).padStart(2,'0')+'-01';
-      periodEnd = new Date(periodYear, periodMonth, 0).toISOString().slice(0,10);
+      periodEnd = localISO(new Date(periodYear, periodMonth, 0));
       periodLabel = monthLabel(periodYear, periodMonth);
     } else {
       periodStart = val('rPeriodStart');
