@@ -859,12 +859,22 @@ function renderSignUp(opts){
   wireSignUpForm();
 }
 
+function renderCheckEmail(email){
+  authCard().innerHTML = ''
+    +'<img src="'+AUTH_LOGO_IMG+'" alt="Reconi Payroll" style="width:140px;height:auto;display:block;margin:0 auto 14px;">'
+    +'<div class="auth-title">Account created</div>'
+    +'<div class="auth-sub">One more step</div>'
+    +'<div class="pending-box">We sent a confirmation link to <b>'+esc(email||'')+'</b>. Open it to confirm your email address, then sign in here. Your account is approved automatically once you sign in.</div>'
+    +'<div class="login-links" style="justify-content:center;margin-top:16px;"><span class="link-btn" id="checkEmailSignin">Go to sign in</span></div>';
+  var b = document.getElementById('checkEmailSignin');
+  if(b) b.onclick = function(){ renderSignIn(); };
+}
 function renderPendingApproval(email){
   authCard().innerHTML = ''
     +'<img src="'+AUTH_LOGO_IMG+'" alt="Reconi Payroll" style="width:140px;height:auto;display:block;margin:0 auto 14px;">'
     +'<div class="auth-title">RECONI</div>'
     +'<div class="auth-sub">Awaiting approval</div>'
-    +'<div class="pending-box">Your account ('+esc(email||'')+') has been created but hasn&#39;t been approved yet. An administrator needs to activate it before you can sign in.</div>'
+    +'<div class="pending-box">Your account ('+esc(email||'')+') is not active. Please contact Alcock Consulting to have it activated.</div>'
     +'<div class="login-links" style="justify-content:center;margin-top:16px;"><span class="link-btn" id="pendingSignoutBtn">Sign out</span></div>';
   var b = document.getElementById('pendingSignoutBtn');
   if(b) b.onclick = function(){ signOut(); };
@@ -947,7 +957,8 @@ function wireSignUpForm(){
       var res = await sb.auth.signUp({ email: email, password: pass, options:{ data:{ name: name, company: company } } });
       btn.disabled = false; btn.textContent = 'Create account';
       if(res.error){ err.textContent = res.error.message; err.classList.add('show'); return; }
-      renderPendingApproval(email);
+      if(res.data && res.data.session){ await handlePostAuth(); return; }   // email confirmation off: signed in already
+      renderCheckEmail(email);
     }catch(ex){
       btn.disabled = false; btn.textContent = 'Create account';
       err.textContent = 'Could not create account right now.'; err.classList.add('show');
@@ -1920,19 +1931,19 @@ function renderApprovalsCard(){
   var aRows = act.map(function(a){
     var isMe = state.currentUser && a.id===state.currentUser.id;
     return '<tr><td><b>'+esc(a.name||'—')+'</b><div class="stat-caption">'+esc(a.email)+'</div></td>'
-      +'<td>'+esc(capitalize(a.role))+'</td><td>'+esc(a.company||'—')+'</td>'
+      +'<td>'+esc(capitalize(a.role))+'</td><td>'+esc(a.company||'—')+'</td><td>'+esc(fmt(a.createdAt))+'</td>'
       +'<td style="white-space:nowrap;">'+(isMe?'<span class="stat-caption">(you)</span>':
         (a.role==='client'?'<span class="link-btn" data-client-companies="'+esc(a.id)+'">Companies</span> &nbsp; ':'')
         +'<span class="link-btn" data-deactivate-account="'+esc(a.id)+'">Deactivate</span>')+'</td></tr>';
   }).join('');
   return ''
-  +'<div class="card" style="margin-bottom:14px;"><div class="card-header"><div class="card-title">Sign-up requests'+(pend.length?' <span class="pill-status pill-gold">'+pend.length+' waiting</span>':'')+'</div></div>'
+  +'<div class="card" style="margin-bottom:14px;"><div class="card-header"><div class="card-title">Accounts needing approval'+(pend.length?' <span class="pill-status pill-gold">'+pend.length+' waiting</span>':'')+'</div></div>'
     +'<div class="table-wrap"><table><thead><tr><th>Person</th><th>Company they entered</th><th>Registered</th><th></th></tr></thead><tbody>'
-    +(pRows || '<tr><td colspan="4" class="empty-row">No one is waiting for approval.</td></tr>')
+    +(pRows || '<tr><td colspan="4" class="empty-row">No one is waiting. New client sign-ups are approved automatically.</td></tr>')
     +'</tbody></table></div></div>'
   +'<div class="card" style="margin-bottom:14px;"><div class="card-title" style="margin-bottom:8px;">Approved accounts</div>'
-    +'<div class="table-wrap"><table><thead><tr><th>Person</th><th>Role</th><th>Company they entered</th><th></th></tr></thead><tbody>'
-    +(aRows || '<tr><td colspan="4" class="empty-row">No approved accounts.</td></tr>')
+    +'<div class="table-wrap"><table><thead><tr><th>Person</th><th>Role</th><th>Company they entered</th><th>Registered</th><th></th></tr></thead><tbody>'
+    +(aRows || '<tr><td colspan="5" class="empty-row">No approved accounts.</td></tr>')
     +'</tbody></table></div></div>';
 }
 
