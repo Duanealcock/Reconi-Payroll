@@ -1409,6 +1409,14 @@ function activityFromRow(r){
 }
 
 /* Generic write helpers: Supabase when connected, localStorage fallback otherwise */
+var lastSaveAlert = 0;
+function reportSaveError(collection, e){
+  var now = Date.now();
+  if(now - lastSaveAlert < 4000) return;
+  lastSaveAlert = now;
+  var msg = (e && (e.message || e.details)) || 'unknown error';
+  alert('This change was NOT saved to the database ('+collection+').\n\n'+msg+'\n\nIf this says "row-level security", the latest SQL migrations have not been run in Supabase yet, or this login has no access to the company.');
+}
 async function dbSet(collection, doc){
   if(sb && dbReady){
     try{
@@ -1427,7 +1435,7 @@ async function dbSet(collection, doc){
       }
       setSync('Saved just now', true);
       return true;
-    }catch(e){ console.log('save error', e); setSync('Save failed — retry', false); return false; }
+    }catch(e){ console.log('save error', e); setSync('Save failed — retry', false); reportSaveError(collection, e); return false; }
   }else{
     if(isClient()) return false;   // never keep a client's data only in this browser
     persistLocalFallback();
@@ -1459,8 +1467,8 @@ function removeLocal(arr, id){
 }
 
 async function saveCompany(doc){ upsertLocal(state.companies, doc); return await dbSet('companies', doc); }
-async function saveEmployee(doc){ upsertLocal(state.employees, doc); await dbSet('employees', doc); }
-async function savePayrun(doc){ upsertLocal(state.payruns, doc); await dbSet('payruns', doc); }
+async function saveEmployee(doc){ upsertLocal(state.employees, doc); return await dbSet('employees', doc); }
+async function savePayrun(doc){ upsertLocal(state.payruns, doc); return await dbSet('payruns', doc); }
 async function saveLeave(doc){ upsertLocal(state.leave, doc); await dbSet('leave_requests', doc); }
 async function saveUser(doc){ upsertLocal(state.users, doc); persistLocalUsers(); }
 async function saveEmp201(doc){ upsertLocal(state.emp201, doc); await dbSet('emp201', doc); }
@@ -3832,7 +3840,11 @@ function openNewRunModal(){
       periodLabel: periodLabel, payDate: payDate, status:'draft', lines: lines, totals: totals,
       createdAt: Date.now()
     };
-    await savePayrun(run);
+    var savedOk = await savePayrun(run);
+    if(savedOk===false){
+      state.payruns = state.payruns.filter(function(x){return x.id!==run.id;});
+      return;   // the error message has already been shown
+    }
     logActivity('payrun.create', periodLabel+' — '+runEmployees.length+' employee(s)');
     closeModal();
     state.route='payrun-detail'; state.routeParam={runId:run.id};
