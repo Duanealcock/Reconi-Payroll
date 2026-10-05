@@ -545,18 +545,47 @@ function medicalCreditMonthly(dependants){
   if(dependants===1) return 376;
   return 752 + 254*(dependants-1);
 }
+// Hourly rate used for overtime / Sunday / public-holiday premiums.
+// Hourly staff: their hourly rate. Monthly-paid staff: basic pay divided by
+// the hours in the pay period (BCEA 45-hour week = 195 h/month, 90 fortnight, 45 week)
+// unless a Standard Hours figure has been captured on the employee.
+function ordinaryHourlyRate(emp){
+  if(emp.payFrequency==='hourly') return Number(emp.hourlyRate)||0;
+  var hrs = Number(emp.standardHours)||0;
+  if(hrs<=0) hrs = 45*52/periodsPerYearOf(emp);
+  return hrs>0 ? (Number(emp.basicSalary)||0)/hrs : 0;
+}
+// Default multipliers. Public-holiday work for a monthly-paid employee is a
+// top-up of 1x, because the holiday itself is already inside the monthly salary.
+function defaultPremiumRates(emp){
+  var hourly = emp.payFrequency==='hourly';
+  return {overtime:1.5, sunday:2, publicHoliday: hourly ? 2 : 1};
+}
 function calcPayslipLine(emp, company, extra){
+  extra = extra || {};
   var periodsPerYear = periodsPerYearOf(emp);
   var isHourly = emp.payFrequency==='hourly';
   var basic = isHourly
     ? (Number(emp.hourlyRate)||0) * (Number(emp.standardHours)||160)
     : (Number(emp.basicSalary)||0);
-  var overtimeHours = isHourly ? Number(extra && extra.overtimeHours)||0 : 0;
-  var overtimeRate = Number(extra && extra.overtimeRate)||1.5;
-  var overtimePay = overtimeHours>0 ? Math.round((Number(emp.hourlyRate)||0) * overtimeHours * overtimeRate * 100)/100 : 0;
+  var dr = defaultPremiumRates(emp);
+  var rate = ordinaryHourlyRate(emp);
+  var prem = function(hoursKey, rateKey, dflt){
+    var h = Math.max(0, Number(extra[hoursKey])||0);
+    var m = Number(extra[rateKey]);
+    if(!(m>0)) m = dflt;
+    return {hours:h, rate:m, pay: h>0 ? Math.round(rate*h*m*100)/100 : 0};
+  };
+  var ot = prem('overtimeHours','overtimeRate',dr.overtime);
+  var sun = prem('sundayHours','sundayRate',dr.sunday);
+  var ph = prem('publicHolidayHours','publicHolidayRate',dr.publicHoliday);
+  var overtimeHours = ot.hours, overtimeRate = ot.rate, overtimePay = ot.pay;
+  var sundayHours = sun.hours, sundayRate = sun.rate, sundayPay = sun.pay;
+  var publicHolidayHours = ph.hours, publicHolidayRate = ph.rate, publicHolidayPay = ph.pay;
+  var premiumPay = overtimePay + sundayPay + publicHolidayPay;
   var travel = Number(emp.travelAllowance)||0;
   var other = Number(emp.otherAllowance)||0;
-  var gross = basic + overtimePay + travel + other;
+  var gross = basic + premiumPay + travel + other;
   var annualGross = gross*periodsPerYear;
   var retPerPeriod = Number(emp.retirementContribution)||0;
   var raPerPeriod = Number(emp.raContribution)||0;
@@ -586,6 +615,9 @@ function calcPayslipLine(emp, company, extra){
     employeeId: emp.id, employeeName: (emp.firstName+' '+emp.lastName).trim(),
     payCycle: payCycleOf(emp),
     basic: basic, overtimeHours: overtimeHours, overtimeRate: overtimeRate, overtimePay: overtimePay,
+    sundayHours: sundayHours, sundayRate: sundayRate, sundayPay: sundayPay,
+    publicHolidayHours: publicHolidayHours, publicHolidayRate: publicHolidayRate, publicHolidayPay: publicHolidayPay,
+    hourlyRateUsed: rate,
     travelAllowance: travel, otherAllowance: other, gross: gross,
     retirementDeduction: retPerPeriod, raContribution: raPerPeriod, raDeductedFromPay: raDeductedFromPay,
     raDeductionFromPay: raDeductionFromPay, retirementTaxDeduction: combinedRetirementAnnual/periodsPerYear,
@@ -1540,11 +1572,16 @@ function renderPayrunDetail(runId){
   if(!r) return renderPayruns();
   var rows = r.lines.map(function(l){
     var emp = employeeById(l.employeeId);
-    var canOvertime = r.status==='draft' && emp && emp.payFrequency==='hourly';
-    return '<tr><td>'+esc(l.employeeName)+(l.overtimePay?' <span class="stat-caption">(+ '+l.overtimeHours+'h OT)</span>':'')+'</td><td>'+fmtZAR(l.gross)+'</td><td>'+fmtZAR(l.paye)+'</td>'
+    var canOvertime = r.status==='draft' && !!emp;
+    var hasPremium = !!(l.overtimePay || l.sundayPay || l.publicHolidayPay);
+    var premCaption = [];
+    if(l.overtimeHours) premCaption.push(l.overtimeHours+'h OT');
+    if(l.sundayHours) premCaption.push(l.sundayHours+'h Sun');
+    if(l.publicHolidayHours) premCaption.push(l.publicHolidayHours+'h PH');
+    return '<tr><td>'+esc(l.employeeName)+(premCaption.length?' <span class="stat-caption">(+ '+premCaption.join(', ')+')</span>':'')+'</td><td>'+fmtZAR(l.gross)+'</td><td>'+fmtZAR(l.paye)+'</td>'
     +'<td>'+fmtZAR(l.uifEmployee)+'</td><td>'+fmtZAR(l.totalDeductions)+'</td><td><b>'+fmtZAR(l.netPay)+'</b></td>'
     +'<td><span class="link-btn" data-view-payslip="'+r.id+'|'+l.employeeId+'">Payslip</span>'
-      +(canOvertime?' &nbsp; <span class="link-btn" data-edit-overtime="'+r.id+'|'+l.employeeId+'">'+(l.overtimePay?'Edit':'Add')+' overtime</span>':'')
+      +(canOvertime?' &nbsp; <span class="link-btn" data-edit-overtime="'+r.id+'|'+l.employeeId+'">'+(hasPremium?'Edit':'Add')+' overtime / Sunday / holiday hours</span>':'')
     +'</td></tr>';
   }).join('');
   return ''
@@ -1623,6 +1660,8 @@ function payslipCardHtml(r, line, emp, c){
     +'<tbody>'
       +'<tr><td>Basic pay this period</td><td style="text-align:right">'+fmtZAR(line.basic)+'</td><td>PAYE (income tax)</td><td style="text-align:right">'+fmtZAR(line.paye)+'</td></tr>'
       +(line.overtimePay ? '<tr><td>Overtime ('+line.overtimeHours+' hrs @ '+line.overtimeRate+'x)</td><td style="text-align:right">'+fmtZAR(line.overtimePay)+'</td><td></td><td></td></tr>' : '')
+      +(line.sundayPay ? '<tr><td>Sunday time ('+line.sundayHours+' hrs @ '+line.sundayRate+'x)</td><td style="text-align:right">'+fmtZAR(line.sundayPay)+'</td><td></td><td></td></tr>' : '')
+      +(line.publicHolidayPay ? '<tr><td>Public holiday worked ('+line.publicHolidayHours+' hrs @ '+line.publicHolidayRate+'x)</td><td style="text-align:right">'+fmtZAR(line.publicHolidayPay)+'</td><td></td><td></td></tr>' : '')
       +'<tr><td>Travel allowance</td><td style="text-align:right">'+fmtZAR(line.travelAllowance)+'</td><td>UIF (employee 1%)</td><td style="text-align:right">'+fmtZAR(line.uifEmployee)+'</td></tr>'
       +'<tr><td>Other allowance</td><td style="text-align:right">'+fmtZAR(line.otherAllowance)+'</td><td>Pension/provident fund contribution</td><td style="text-align:right">'+fmtZAR(line.retirementDeduction)+'</td></tr>'
       +(line.raContribution ? '<tr><td></td><td></td><td>Retirement annuity (RA)'+(line.raDeductedFromPay?'':' — paid privately, tax purposes only')+'</td><td style="text-align:right">'+fmtZAR(line.raDeductionFromPay)+'</td></tr>' : '')
@@ -3223,21 +3262,50 @@ function openOvertimeModal(runId, employeeId){
   var line = r && r.lines.find(function(l){return l.employeeId===employeeId;});
   var emp = employeeById(employeeId);
   if(!r || !line || !emp) return;
+  var dr = defaultPremiumRates(emp);
+  var rate = ordinaryHourlyRate(emp);
+  var isMonthly = emp.payFrequency!=='hourly';
   openModal(''
-    +'<h2>Overtime — '+esc(emp.firstName+' '+emp.lastName)+'</h2>'
-    +'<div class="helptext">Overtime hours are paid at the hourly rate ('+fmtZAR(emp.hourlyRate)+'/hr) times the multiplier below. The BCEA default is 1.5x for ordinary overtime and 2x for Sundays/certain public holidays — adjust as applicable.</div>'
+    +'<h2>Overtime, Sunday &amp; public holiday hours — '+esc(emp.firstName+' '+emp.lastName)+'</h2>'
+    +'<div class="helptext">Ordinary hourly rate used: <b>'+fmtZAR(rate)+'/hr</b>'
+      +(isMonthly?' (monthly pay ÷ '+(Number(emp.standardHours)>0?Number(emp.standardHours):Math.round(45*52/periodsPerYearOf(emp)*100)/100)+' hours in the period)':'')
+      +'. Enter the hours worked this pay period and the pay multiplier for each type; the multipliers below are the BCEA defaults and can be changed to match the employment contract, bargaining council or sectoral determination.</div>'
     +'<div class="form-grid">'
-      +field('Overtime hours this period','oHours',line.overtimeHours||0,'number')
-      +field('Rate multiplier','oRate',line.overtimeRate||1.5,'number')
+      +field('Overtime hours','oHours',line.overtimeHours||0,'number')
+      +field('Overtime multiplier (BCEA default 1.5x)','oRate',line.overtimeRate||dr.overtime,'number')
+      +field('Sunday hours','sHours',line.sundayHours||0,'number')
+      +field('Sunday multiplier (2x if not ordinarily working Sundays, 1.5x if they do)','sRate',line.sundayRate||dr.sunday,'number')
+      +field('Public holiday hours worked','pHours',line.publicHolidayHours||0,'number')
+      +field('Public holiday multiplier ('+(isMonthly?'1x top-up on top of the monthly salary, which already covers the holiday':'2x for hourly-paid staff')+')','pRate',line.publicHolidayRate||dr.publicHoliday,'number')
     +'</div>'
-    +'<div class="modal-actions"><button class="btn" id="cancelOvertimeBtn">Cancel</button><button class="btn btn-primary" id="saveOvertimeBtn">Save overtime</button></div>'
+    +'<div id="otPreview" class="stat-caption" style="margin-top:10px;"></div>'
+    +'<div class="helptext" style="margin-top:8px;">BCEA limits: overtime by agreement only, normally no more than 3 hours a day or 10 hours a week, and overtime/Sunday/public-holiday rules apply to employees below the BCEA earnings threshold. Premium pay is included in gross pay, so PAYE, UIF and SDL are calculated on it.</div>'
+    +'<div class="modal-actions"><button class="btn" id="cancelOvertimeBtn">Cancel</button><button class="btn btn-primary" id="saveOvertimeBtn">Save hours</button></div>'
   );
+  function readExtra(){
+    return {
+      overtimeHours:numVal('oHours'), overtimeRate:numVal('oRate'),
+      sundayHours:numVal('sHours'), sundayRate:numVal('sRate'),
+      publicHolidayHours:numVal('pHours'), publicHolidayRate:numVal('pRate')
+    };
+  }
+  function refreshPreview(){
+    var l = calcPayslipLine(emp, currentCompany(), readExtra());
+    var el = document.getElementById('otPreview');
+    if(!el) return;
+    el.innerHTML = 'Overtime '+fmtZAR(l.overtimePay)+' · Sunday '+fmtZAR(l.sundayPay)+' · Public holiday '+fmtZAR(l.publicHolidayPay)
+      +' → new gross <b>'+fmtZAR(l.gross)+'</b>, net pay <b>'+fmtZAR(l.netPay)+'</b>';
+  }
+  ['oHours','oRate','sHours','sRate','pHours','pRate'].forEach(function(id){
+    var el = document.getElementById(id);
+    if(el) el.addEventListener('input', refreshPreview);
+  });
+  refreshPreview();
   document.getElementById('cancelOvertimeBtn').onclick = closeModal;
   document.getElementById('saveOvertimeBtn').onclick = async function(){
-    var overtimeHours = numVal('oHours');
-    var overtimeRate = numVal('oRate') || 1.5;
+    var extra = readExtra();
     var company = currentCompany();
-    var newLine = calcPayslipLine(emp, company, {overtimeHours:overtimeHours, overtimeRate:overtimeRate});
+    var newLine = calcPayslipLine(emp, company, extra);
     var idx = r.lines.findIndex(function(l){return l.employeeId===employeeId;});
     r.lines[idx] = newLine;
     r.totals = r.lines.reduce(function(t,l){
@@ -3245,7 +3313,7 @@ function openOvertimeModal(runId, employeeId){
       t.sdlEmployer+=l.sdlEmployer; t.netPay+=l.netPay; t.employerCost+=l.employerCost; return t;
     }, {gross:0,paye:0,uifEmployee:0,uifEmployer:0,sdlEmployer:0,netPay:0,employerCost:0});
     await savePayrun(r);
-    logActivity('payrun.overtime', emp.firstName+' '+emp.lastName+' — '+overtimeHours+'h @ '+overtimeRate+'x on '+r.periodLabel);
+    logActivity('payrun.overtime', emp.firstName+' '+emp.lastName+' — OT '+newLine.overtimeHours+'h @ '+newLine.overtimeRate+'x, Sun '+newLine.sundayHours+'h @ '+newLine.sundayRate+'x, PH '+newLine.publicHolidayHours+'h @ '+newLine.publicHolidayRate+'x on '+r.periodLabel);
     closeModal();
     renderCustom();
   };
