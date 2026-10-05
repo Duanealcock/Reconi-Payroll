@@ -191,6 +191,9 @@ button{font-family:inherit;}
 .sidebar-footer .signout{color:var(--gold-light);font-weight:600;cursor:pointer;}
 
 .menu-toggle{display:none;}
+.nav-badge{margin-left:auto;background:var(--gold);color:#241a05;font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:20px;}
+.nav-badge.hidden{display:none;}
+.approval-banner{background:#faf1de;border:1px solid #ecd9a6;color:#7a5a14;border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:13px;display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;}
 
 /* ---------- Main content ---------- */
 .content{
@@ -396,7 +399,7 @@ tr:last-child td{border-bottom:none;}
       </div>
       <div class="nav-item" data-route="users" data-admin-only="1">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.2"/><path d="M5 20c1.4-4 4.2-6 7-6s5.6 2 7 6"/><path d="M17 4.5a3 3 0 0 1 0 5.8"/></svg>
-        Users &amp; Access
+        Users &amp; Access <span class="nav-badge hidden" id="usersBadge">0</span>
       </div>
       <div class="nav-item" data-route="activity" data-admin-only="1">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/></svg>
@@ -649,6 +652,8 @@ var state = {
   auditLog: [],
   billing: {discountPct:15, vatPct:15, showVat:true, baseFee:0, bandMode:'volume', bands:[]},
   billingMonth: '',
+  accounts: [],
+  accountsError: '',
   currentUser: null,
   currentCompanyId: null,
   route: 'dashboard',
@@ -983,9 +988,20 @@ async function handlePostAuth(){
   if(!profile){ renderSignIn({error:'Could not verify your session. Please sign in again.'}); showLogin(); return; }
   state.currentUser = profile;
   if(!profile.active){ renderPendingApproval(profile.email); showLogin(); return; }
-  await loadPayrollData();
+  var loaded = await loadPayrollData();
+  if(loaded===false && profile.role==='client'){ renderClientLoadError(); showLogin(); return; }
   if(profile.role==='client' && !state.companies.length){ renderClientAddCompany(); showLogin(); return; }
   finishLogin();
+}
+function renderClientLoadError(){
+  authCard().innerHTML = ''
+    +'<img src="'+AUTH_LOGO_IMG+'" alt="Reconi Payroll" style="width:140px;height:auto;display:block;margin:0 auto 14px;">'
+    +'<div class="auth-title">We couldn\'t load your companies</div>'
+    +'<div class="auth-sub">Check your connection and try again. Your data has not been changed.</div>'
+    +'<button class="login-submit" id="clientRetryBtn" style="width:100%;">Try again</button>'
+    +'<div class="login-links" style="justify-content:center;margin-top:16px;"><span class="link-btn" id="clientRetrySignout">Sign out</span></div>';
+  document.getElementById('clientRetryBtn').onclick = function(){ handlePostAuth(); };
+  document.getElementById('clientRetrySignout').onclick = function(){ signOut(); };
 }
 function finishLogin(){
   touchActivity();
@@ -1044,12 +1060,17 @@ function signOut(){
   state.currentUser = null;
   state.companies = []; state.employees = []; state.payruns = []; state.leave = [];
   state.emp201 = []; state.emp501 = []; state.uif = []; state.auditLog = [];
+  state.users = []; state.accounts = []; state.currentCompanyId = null;
+  state.billing = {discountPct:15, vatPct:15, showVat:true, baseFee:0, bandMode:'volume', bands:[]};
+  state.route = 'dashboard'; state.routeParam = null;
+  if(window.__acctTimer){ clearInterval(window.__acctTimer); window.__acctTimer = null; }
   dbReady = false;
   showLogin();
   renderSignIn();
   if(sb){ sb.auth.signOut().catch(function(){}); }
 }
 
+function isClient(){ return !!(state.currentUser && state.currentUser.role==='client'); }
 function isAdmin(){ return !!(state.currentUser && state.currentUser.role==='admin'); }
 var ADMIN_ONLY_ROUTES = {users:1, activity:1, backup:1, billing:1};
 function bootApp(){
@@ -1069,6 +1090,12 @@ function bootApp(){
     document.querySelector('.nav-item[data-route="dashboard"]').classList.add('active');
   }
   render();
+  if(isAdmin()){
+    loadAccounts().then(function(){ if(state.route==='dashboard'||state.route==='users') render(); });
+    if(!window.__acctTimer) window.__acctTimer = setInterval(function(){
+      if(isAdmin()) loadAccounts().then(function(){ if(state.route==='users') render(); });
+    }, 120000);
+  }
 }
 
 function saveLastCompany(id){
@@ -1154,14 +1181,23 @@ async function loadPayrollData(){
 
     setSync('Saved just now', true);
     dbReady = true;
+    return true;
   }catch(e){
     console.log('supabase load error', e);
+    if(isClient()){
+      state.companies = []; state.employees = []; state.payruns = []; state.leave = [];
+      state.emp201 = []; state.emp501 = []; state.uif = []; state.auditLog = []; state.users = [];
+      state.currentCompanyId = null;
+      return false;
+    }
     setSync('Offline — changes stay in this browser only', false);
     await loadLocalFallback();
+    return true;
   }
 }
 
 async function loadLocalUsersOnly(){
+  if(isClient()){ state.users = []; return; }
   try{
     var raw = localStorage.getItem('reconi_fallback_data');
     var data = raw ? JSON.parse(raw) : null;
@@ -1182,6 +1218,7 @@ function persistLocalUsers(){
 }
 
 async function loadLocalFallback(){
+  if(isClient()) return;   // clients never read cached local data (it may belong to another user of this browser)
   try{
     var raw = localStorage.getItem('reconi_fallback_data');
     if(raw){
@@ -1211,6 +1248,7 @@ async function loadLocalFallback(){
   state.currentCompanyId = (last && state.companies.some(function(c){return c.id===last;})) ? last : state.companies[0].id;
 }
 function persistLocalFallback(){
+  if(isClient()) return;
   try{
     localStorage.setItem('reconi_fallback_data', JSON.stringify({
       companies: state.companies, employees: state.employees, payruns: state.payruns, leave: state.leave, users: state.users, emp201: state.emp201, emp501: state.emp501, uif: state.uif, auditLog: state.auditLog
@@ -1380,6 +1418,7 @@ async function dbSet(collection, doc){
       return true;
     }catch(e){ console.log('save error', e); setSync('Save failed — retry', false); return false; }
   }else{
+    if(isClient()) return false;   // never keep a client's data only in this browser
     persistLocalFallback();
     return true;
   }
@@ -1393,6 +1432,7 @@ async function dbDelete(collection, id){
       return true;
     }catch(e){ console.log('delete error', e); return false; }
   }else{
+    if(isClient()) return false;   // never keep a client's data only in this browser
     persistLocalFallback();
     return true;
   }
@@ -1472,6 +1512,7 @@ function navigate(route, param){
   });
   closeSidebarMobile();
   render();
+  if(route==='users' && isAdmin()) loadAccounts().then(function(){ if(state.route==='users') render(); });
 }
 function icon(check){
   return check
@@ -1540,6 +1581,7 @@ function renderDashboard(){
 
   return ''
   +'<div class="topbar"><div><h1>Dashboard</h1><div class="subtitle">'+esc(currentCompany()?currentCompany().name:'')+'</div></div></div>'
+  +((isAdmin() && pendingAccounts().length) ? '<div class="approval-banner"><span><b>'+pendingAccounts().length+'</b> sign-up'+(pendingAccounts().length===1?' is':'s are')+' waiting for your approval.</span><button class="btn btn-sm btn-gold" data-route-link="users">Review</button></div>' : '')
   +'<div class="stat-grid">'
     +statCard('ACTIVE EMPLOYEES', active.length, 'Currently on payroll')
     +statCard('NEXT PAY RUN', nextDraft?esc(nextDraft.periodLabel):'None scheduled', nextDraft?'Draft — not yet finalized':'Create one in Pay Runs')
@@ -1790,6 +1832,110 @@ function field(label,id,val,type){
   return '<div class="form-field"><label>'+label+'</label><input type="'+(type||'text')+'" id="'+id+'" value="'+esc(val==null?'':val)+'"></div>';
 }
 
+
+/* ---------- Sign-up approvals (admin only, Supabase) ---------- */
+function pendingAccounts(){ return state.accounts.filter(function(a){ return !a.active; }); }
+function updateApprovalsBadge(){
+  var b = document.getElementById('usersBadge');
+  if(!b) return;
+  var n = isAdmin() ? pendingAccounts().length : 0;
+  b.textContent = n; b.classList.toggle('hidden', !n);
+}
+async function loadAccounts(){
+  if(!sb || !isAdmin()){ state.accounts = []; updateApprovalsBadge(); return; }
+  try{
+    var res = await sb.rpc('admin_list_profiles');
+    if(res.error) throw res.error;
+    state.accounts = (res.data||[]).map(function(r){
+      return {id:r.id, email:r.email||'', name:r.name||'', role:r.role||'client', active:!!r.active, company:r.company||'', createdAt:r.created_at};
+    });
+    state.accountsError = '';
+  }catch(e){
+    console.log('load accounts', e);
+    state.accountsError = 'Could not load sign-ups. Run account-approvals.sql in Supabase, then refresh.';
+  }
+  updateApprovalsBadge();
+}
+async function reviewAccount(uid, action, role){
+  var res = await sb.rpc('admin_review_profile', {uid:uid, action:action, new_role:role||'client'});
+  if(res.error){ alert('That did not work: '+res.error.message); return false; }
+  var a = state.accounts.find(function(x){return x.id===uid;});
+  logActivity('account.'+action, (a?a.email:uid)+(action==='approve'?' as '+(role||'client'):''));
+  await loadAccounts();
+  return true;
+}
+
+async function openClientCompaniesModal(uid){
+  var a = state.accounts.find(function(x){return x.id===uid;});
+  if(!a) return;
+  var res = await sb.rpc('admin_client_companies', {uid:uid});
+  if(res.error){ alert('Could not load this client\'s companies: '+res.error.message); return; }
+  var via = {}; (res.data||[]).forEach(function(r){ via[r.company_id] = r.via; });
+  var rows = state.companies.map(function(co){
+    var v = via[co.id];
+    return '<label style="display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid var(--border);'+(v==='owner'?'opacity:.85;':'cursor:pointer;')+'">'
+      +'<input type="checkbox" data-co-access="'+esc(co.id)+'"'+(v?' checked':'')+(v==='owner'?' disabled':'')+'>'
+      +'<span style="flex:1;">'+esc(co.name)+'</span>'
+      +(v==='owner'?'<span class="stat-caption">created by them</span>':'')+'</label>';
+  }).join('');
+  openModal(''
+    +'<h2>Companies — '+esc(a.name||a.email)+'</h2>'
+    +'<div class="helptext">'+esc(a.email)+' always sees the companies they created, plus any you tick here. They never see any other company. Ticking a company lets them view and manage it.</div>'
+    +'<div style="max-height:340px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:2px 10px;">'
+      +(rows || '<div class="empty-row">No companies yet.</div>')
+    +'</div>'
+    +'<div id="coAccessMsg" class="helptext" style="margin-top:8px;"></div>'
+    +'<div class="modal-actions"><button class="btn btn-primary" id="coAccessDone">Done</button></div>'
+  );
+  document.getElementById('coAccessDone').onclick = function(){ closeModal(); };
+  document.querySelectorAll('[data-co-access]').forEach(function(box){
+    box.onchange = async function(){
+      var cid = box.dataset.coAccess;
+      box.disabled = true;
+      var r = await sb.rpc('admin_set_company_access', {uid:uid, cid:cid, grant_access:box.checked});
+      var msg = document.getElementById('coAccessMsg');
+      if(r.error){ box.checked = !box.checked; if(msg) msg.textContent = 'Could not save: '+r.error.message; }
+      else {
+        var co = state.companies.find(function(x){return x.id===cid;});
+        logActivity('account.company_access', (box.checked?'Granted ':'Removed ')+a.email+' access to '+(co?co.name:cid));
+        if(msg) msg.textContent = 'Saved.';
+      }
+      box.disabled = false;
+    };
+  });
+}
+function renderApprovalsCard(){
+  if(!sb) return '';
+  if(state.accountsError) return '<div class="card" style="margin-bottom:14px;"><div class="card-title">Sign-up requests</div><div class="helptext" style="margin-top:6px;">'+esc(state.accountsError)+'</div></div>';
+  var fmt = function(d){ try{ return new Date(d).toLocaleDateString('en-ZA'); }catch(e){ return ''; } };
+  var pend = pendingAccounts();
+  var pRows = pend.map(function(a){
+    return '<tr><td><b>'+esc(a.name||'—')+'</b><div class="stat-caption">'+esc(a.email)+'</div></td>'
+      +'<td>'+esc(a.company||'—')+'</td><td>'+esc(fmt(a.createdAt))+'</td>'
+      +'<td style="white-space:nowrap;"><button class="btn btn-sm btn-gold" data-approve-account="'+esc(a.id)+'" data-role="client">Approve as client</button> '
+      +'<button class="btn btn-sm" data-approve-account="'+esc(a.id)+'" data-role="staff">As staff</button> '
+      +'<button class="btn btn-sm btn-danger" data-decline-account="'+esc(a.id)+'">Decline</button></td></tr>';
+  }).join('');
+  var act = state.accounts.filter(function(a){ return a.active; });
+  var aRows = act.map(function(a){
+    var isMe = state.currentUser && a.id===state.currentUser.id;
+    return '<tr><td><b>'+esc(a.name||'—')+'</b><div class="stat-caption">'+esc(a.email)+'</div></td>'
+      +'<td>'+esc(capitalize(a.role))+'</td><td>'+esc(a.company||'—')+'</td>'
+      +'<td style="white-space:nowrap;">'+(isMe?'<span class="stat-caption">(you)</span>':
+        (a.role==='client'?'<span class="link-btn" data-client-companies="'+esc(a.id)+'">Companies</span> &nbsp; ':'')
+        +'<span class="link-btn" data-deactivate-account="'+esc(a.id)+'">Deactivate</span>')+'</td></tr>';
+  }).join('');
+  return ''
+  +'<div class="card" style="margin-bottom:14px;"><div class="card-header"><div class="card-title">Sign-up requests'+(pend.length?' <span class="pill-status pill-gold">'+pend.length+' waiting</span>':'')+'</div></div>'
+    +'<div class="table-wrap"><table><thead><tr><th>Person</th><th>Company they entered</th><th>Registered</th><th></th></tr></thead><tbody>'
+    +(pRows || '<tr><td colspan="4" class="empty-row">No one is waiting for approval.</td></tr>')
+    +'</tbody></table></div></div>'
+  +'<div class="card" style="margin-bottom:14px;"><div class="card-title" style="margin-bottom:8px;">Approved accounts</div>'
+    +'<div class="table-wrap"><table><thead><tr><th>Person</th><th>Role</th><th>Company they entered</th><th></th></tr></thead><tbody>'
+    +(aRows || '<tr><td colspan="4" class="empty-row">No approved accounts.</td></tr>')
+    +'</tbody></table></div></div>';
+}
+
 /* ---------- Users & Access ---------- */
 function renderUsers(){
   var rows = state.users.map(function(u){
@@ -1804,6 +1950,7 @@ function renderUsers(){
   return ''
   +'<div class="topbar"><div><h1>Users &amp; Access</h1><div class="subtitle">People who can sign in to this Reconi Payroll workspace</div></div>'
     +'<div class="topbar-right"><button class="btn btn-gold" id="addUserBtn">+ Add user</button></div></div>'
+  +renderApprovalsCard()
   +'<div class="card"><div class="table-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th></th></tr></thead><tbody>'
   +(rows || '<tr><td colspan="4" class="empty-row">No users yet.</td></tr>')
   +'</tbody></table></div></div>'
@@ -2799,6 +2946,30 @@ function renderReports(){
 
 /* ===================== Event wiring ===================== */
 function wireRouteEvents(){
+  document.querySelectorAll('[data-approve-account]').forEach(function(el){
+    el.onclick = async function(){
+      var role = el.dataset.role||'client';
+      el.disabled = true;
+      if(await reviewAccount(el.dataset.approveAccount, 'approve', role)) render(); else el.disabled = false;
+    };
+  });
+  document.querySelectorAll('[data-client-companies]').forEach(function(el){
+    el.onclick = function(){ openClientCompaniesModal(el.dataset.clientCompanies); };
+  });
+  document.querySelectorAll('[data-decline-account]').forEach(function(el){
+    el.onclick = async function(){
+      var a = state.accounts.find(function(x){return x.id===el.dataset.declineAccount;});
+      if(!confirm('Decline and delete the sign-up for '+(a?a.email:'this person')+'? They would have to register again.')) return;
+      if(await reviewAccount(el.dataset.declineAccount, 'decline')) render();
+    };
+  });
+  document.querySelectorAll('[data-deactivate-account]').forEach(function(el){
+    el.onclick = async function(){
+      var a = state.accounts.find(function(x){return x.id===el.dataset.deactivateAccount;});
+      if(!confirm('Deactivate '+(a?a.email:'this account')+'? They will not be able to sign in until you approve them again.')) return;
+      if(await reviewAccount(el.dataset.deactivateAccount, 'deactivate')) render();
+    };
+  });
   var bm = document.getElementById('billMonth');
   if(bm) bm.onchange = function(){ if(bm.value){ state.billingMonth = bm.value; render(); } };
   var brb = document.getElementById('billRateBtn'); if(brb) brb.onclick = openRateCardModal;
