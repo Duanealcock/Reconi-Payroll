@@ -191,6 +191,25 @@ button{font-family:inherit;}
 .sidebar-footer .signout{color:var(--gold-light);font-weight:600;cursor:pointer;}
 
 .menu-toggle{display:none;}
+/* ---------- Print / Save as PDF: documents only, no app controls ---------- */
+.print-value{display:none;}
+@page{ size:A4; margin:14mm; }
+@media print{
+  html,body{background:#fff !important;}
+  .sidebar, .sidebar-scrim, .menu-toggle, #login-screen, #modal-root, .no-print,
+  button, .btn, .link-btn, .modal-overlay{ display:none !important; }
+  .app{display:block;}
+  .content{margin:0 !important;padding:0 !important;}
+  .card, .payslip{box-shadow:none !important;}
+  .card{border-color:#d5d9e0;break-inside:avoid;}
+  .topbar{margin-bottom:10px;}
+  .table-wrap{overflow:visible !important;}
+  tr{break-inside:avoid;}
+  .print-value{display:inline-block;font:inherit;color:#000;padding:0;}
+  .print-hidden{display:none !important;}
+  .helptext{display:none;}
+}
+
 .nav-badge{margin-left:auto;background:var(--gold);color:#241a05;font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:20px;}
 .nav-badge.hidden{display:none;}
 .approval-banner{background:#faf1de;border:1px solid #ecd9a6;color:#7a5a14;border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:13px;display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;}
@@ -4037,6 +4056,38 @@ function closeSidebarMobile(){
   document.getElementById('sidebar').classList.remove('open');
   document.getElementById('scrim').classList.remove('open');
 }
+
+/* Swap form controls for plain text while printing, and put them back afterwards. */
+var printSwaps = [];
+function preparePrintView(){
+  if(printSwaps.length) return;
+  document.querySelectorAll('#page-root input, #page-root select, #page-root textarea').forEach(function(el){
+    if(el.type==='hidden' || el.type==='button' || el.type==='submit' || el.closest('.no-print')) return;
+    var text;
+    if(el.tagName==='SELECT') text = el.options[el.selectedIndex] ? el.options[el.selectedIndex].text : '';
+    else if(el.type==='checkbox' || el.type==='radio') text = el.checked ? '☑' : '☐';
+    else if(el.type==='date' && el.value){ try{ text = new Date(el.value+'T00:00:00').toLocaleDateString('en-ZA'); }catch(e){ text = el.value; } }
+    else text = el.value;
+    var span = document.createElement('span');
+    span.className = 'print-value';
+    span.textContent = text || '—';
+    el.parentNode.insertBefore(span, el);
+    el.classList.add('print-hidden');
+    printSwaps.push({el:el, span:span});
+  });
+}
+function restoreAfterPrint(){
+  printSwaps.forEach(function(s){ s.el.classList.remove('print-hidden'); if(s.span.parentNode) s.span.parentNode.removeChild(s.span); });
+  printSwaps = [];
+}
+window.addEventListener('beforeprint', preparePrintView);
+window.addEventListener('afterprint', restoreAfterPrint);
+if(window.matchMedia){
+  var pmq = window.matchMedia('print');
+  var pl = function(e){ if(e.matches) preparePrintView(); else restoreAfterPrint(); };
+  if(pmq.addEventListener) pmq.addEventListener('change', pl); else if(pmq.addListener) pmq.addListener(pl);
+}
+
 /* ===================== Boot ===================== */
 checkAuthAndBoot();
 
