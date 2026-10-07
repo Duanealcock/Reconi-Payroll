@@ -191,15 +191,37 @@ button{font-family:inherit;}
 .sidebar-footer .signout{color:var(--gold-light);font-weight:600;cursor:pointer;}
 
 .menu-toggle{display:none;}
+
+/* ---------- Payslip document (SimplePay-style layout) ---------- */
+.ps-doc{background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif;font-size:12px;padding:18px 20px;margin-bottom:18px;border:1px solid var(--border);border-radius:6px;}
+.ps-t{width:100%;border-collapse:collapse;font-size:12px;}
+.ps-t td,.ps-t th{border:0;padding:3px 4px;vertical-align:top;color:#000;text-align:left;}
+.ps-t td.r,.ps-t th.r{text-align:right;}
+.ps-lbl{font-weight:700;}
+.ps-co{font-weight:700;font-size:13px;margin-bottom:2px;}
+.ps-head{margin-bottom:12px;}
+.ps-emp{margin-bottom:22px;}
+.ps-main,.ps-low{margin-bottom:22px;}
+.ps-main .ps-gap,.ps-low .ps-gap{border-left:2px solid #fff;padding-left:6px;}
+.ps-th td{font-weight:700;border-top:2px solid #6b6b6b;border-bottom:2px solid #6b6b6b;padding:8px 4px;}
+.ps-tot td{font-weight:700;background:#d4d4d4;border-top:3px solid #fff;}
+.ps-net{font-weight:700;background:#bdbdbd;border-top:3px solid #fff;}
+.ps-note{font-size:10.5px;color:#444;margin-top:6px;}
+@media print{
+  .ps-doc{border:0 !important;border-radius:0;padding:0;margin:0 0 6mm;}
+  .ps-tot td,.ps-net,.ps-th td{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+  .ps-doc{break-inside:avoid;}
+}
+
 /* ---------- Print / Save as PDF: documents only, no app controls ---------- */
 .print-value{display:none;}
-@page{ size:A4; margin:14mm; }
+@page{ size:A4; margin:0; }
 @media print{
   html,body{background:#fff !important;}
   .sidebar, .sidebar-scrim, .menu-toggle, #login-screen, #modal-root, .no-print,
   button, .btn, .link-btn, .modal-overlay{ display:none !important; }
   .app{display:block;}
-  .content{margin:0 !important;padding:0 !important;}
+  .content{margin:0 !important;padding:14mm !important;}
   .card, .payslip{box-shadow:none !important;}
   .card{border-color:#d5d9e0;break-inside:avoid;}
   .topbar{margin-bottom:10px;}
@@ -1312,12 +1334,13 @@ function companyToRow(c){
   };
   if(c.ownerId) row.owner_id = c.ownerId;
   if(c.ownerEmail) row.owner_email = c.ownerEmail;
+  if(c.payslipSettings) row.payslip_settings = c.payslipSettings;
   return row;
 }
 function companyFromRow(r){
   return {
     id:r.id, name:r.name, regNo:r.reg_no||'', payeRef:r.paye_ref||'', uifRef:r.uif_ref||'', sdlRef:r.sdl_ref||'',
-    ownerId:r.owner_id||null, ownerEmail:r.owner_email||'',
+    ownerId:r.owner_id||null, ownerEmail:r.owner_email||'', payslipSettings:r.payslip_settings||null,
     sdlApplicable:!!r.sdl_applicable, payDay:r.pay_day||25, address:r.address||'',
     defaultAnnualLeaveDays:r.default_annual_leave_days, defaultSickLeaveDays:r.default_sick_leave_days,
     defaultFamilyRespDays:r.default_family_resp_days, createdAt: r.created_at?Date.parse(r.created_at):Date.now()
@@ -1344,11 +1367,13 @@ function employeeToRow(e){
     var v = e[pair[0]];
     row[pair[1]] = (v===undefined) ? null : v;
   });
+  if(e.address) row.address = e.address;   // optional column (payslip-layout.sql)
   return row;
 }
 function employeeFromRow(r){
   var e = {id:r.id, companyId:r.company_id, terminationReason:r.termination_reason||''};
   EMPLOYEE_FIELD_MAP.forEach(function(pair){ e[pair[0]] = r[pair[1]]; });
+  e.address = r.address || '';
   return e;
 }
 
@@ -1776,7 +1801,7 @@ function renderPayslipView(runId, employeeId){
   var c = currentCompany();
   if(!r || !line || !emp) return renderPayslips();
   return ''
-  +'<div class="topbar"><div><h1>Payslip</h1><div class="subtitle">'+esc(r.periodLabel)+'</div></div>'
+  +'<div class="topbar no-print"><div><h1>Payslip</h1><div class="subtitle">'+esc(r.periodLabel)+'</div></div>'
     +'<div class="topbar-right"><button class="btn" onclick="window.print()">Print / Save PDF</button>'
     +(emp.email ? '<button class="btn" id="emailPayslipBtn" data-emp-email="'+esc(emp.email)+'" data-period="'+esc(r.periodLabel)+'">Email payslip</button>' : '')
     +'<button class="btn" data-route-link="payslips">← Back</button></div></div>'
@@ -1792,37 +1817,168 @@ function renderAllPayslipsForRun(runId){
     return payslipCardHtml(r, line, emp, c);
   }).join('<div style="page-break-after:always;"></div>');
   return ''
-  +'<div class="topbar"><div><h1>All payslips</h1><div class="subtitle">'+esc(r.periodLabel)+'</div></div>'
+  +'<div class="topbar no-print"><div><h1>All payslips</h1><div class="subtitle">'+esc(r.periodLabel)+'</div></div>'
     +'<div class="topbar-right"><button class="btn" onclick="window.print()">Print / Save PDF</button>'
     +'<button class="btn" data-route-link="payruns">← Back to pay runs</button></div></div>'
   +html;
 }
+/* ---------- Payslip layout (per company, edited under Company & Statutory Info) ---------- */
+var PAYSLIP_SETTING_DEFS = [
+  {group:'Header', items:[
+    ['showCompanyAddress','Company address'], ['showCompanyRefs','PAYE / UIF / SDL reference numbers'], ['showPayDate','Pay date'], ['showPayCycle','Pay cycle (monthly / fortnightly / weekly)']
+  ]},
+  {group:'Employee details', items:[
+    ['showEmployeeAddress','Employee address'], ['showJobTitle','Job title'], ['showEmployeeCode','Employee code'], ['showIdNumber','Identity number'],
+    ['showEmployedFrom','Employed from'], ['showRatePerHour','Rate per hour'], ['showTaxNumber','Tax number'], ['showUifNumber','UIF number'], ['showBank','Bank name and account (last 4 digits)']
+  ]},
+  {group:'Earnings & deductions', items:[
+    ['showUnits','Units (hours) column'], ['showOpeningBalance','Opening balance column'], ['hideZeroLines','Hide lines that are zero']
+  ]},
+  {group:'Lower section', items:[
+    ['showCompanyContributions','Company contributions (UIF, SDL)'], ['showYtd','Year-to-date totals'],
+    ['showYtdFringe','YTD: Taxable company contributions / fringe benefits / bonus provision lines'], ['showCostToCompany','Total cost to company line'],
+    ['showDisclaimer','Explanatory PAYE note at the bottom']
+  ]}
+];
+var PAYSLIP_DEFAULTS = {
+  showCompanyAddress:true, showCompanyRefs:false, showPayDate:true, showPayCycle:false,
+  showEmployeeAddress:true, showJobTitle:true, showEmployeeCode:true, showIdNumber:true, showEmployedFrom:true, showRatePerHour:true,
+  showTaxNumber:false, showUifNumber:false, showBank:false,
+  showUnits:true, showOpeningBalance:true, hideZeroLines:true,
+  showCompanyContributions:true, showYtd:true, showYtdFringe:true, showCostToCompany:false, showDisclaimer:false,
+  headerNote:'', footerNote:''
+};
+function payslipSettingsOf(co){
+  var s = Object.assign({}, PAYSLIP_DEFAULTS);
+  if(co && co.payslipSettings) Object.keys(co.payslipSettings).forEach(function(k){ if(k in PAYSLIP_DEFAULTS) s[k] = co.payslipSettings[k]; });
+  return s;
+}
+function psNum(n){
+  n = Number(n)||0;
+  var neg = n<0; n = Math.abs(n);
+  var parts = n.toFixed(2).split('.');
+  parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g,' ');
+  return (neg?'-':'')+parts[0]+'.'+parts[1];
+}
+function psDate(d){ return d ? String(d).slice(0,10).replace(/-/g,'/') : ''; }
+function psLines(t){ return String(t||'').split(/\r?\n/).map(function(x){return x.trim();}).filter(Boolean); }
+/* Year-to-date (SA tax year: 1 March – end February) up to and including this run. */
+function ytdForEmployee(r, employeeId){
+  var end = periodBoundsOfRun(r).end;
+  var y = Number(end.slice(0,4)), m = Number(end.slice(5,7));
+  var start = (m>=3 ? y : y-1)+'-03-01';
+  var out = {taxable:0, paye:0};
+  state.payruns.forEach(function(x){
+    if(x.companyId!==r.companyId) return;
+    if(x.id!==r.id && x.status!=='finalized') return;
+    var b = periodBoundsOfRun(x);
+    if(b.end < start || b.end > end) return;
+    (x.lines||[]).forEach(function(l){
+      if(l.employeeId!==employeeId) return;
+      out.taxable += Number(l.gross)||0; out.paye += Number(l.paye)||0;
+    });
+  });
+  return out;
+}
 function payslipCardHtml(r, line, emp, c){
-  return ''
-  +'<div class="payslip" style="margin-bottom:18px;">'
-    +'<div class="payslip-head"><div><h2>'+esc(c.name)+'</h2><div class="stat-caption">PAYE ref: '+esc(c.payeRef||'—')+' · UIF ref: '+esc(c.uifRef||'—')+'</div></div>'
-      +'<div style="text-align:right"><div class="label-caps">PAYSLIP</div><div class="stat-caption">'+esc(r.periodLabel)+'</div><div class="stat-caption">Pay date: '+esc(r.payDate||'—')+'</div><div class="stat-caption">'+PAY_CYCLES[line.payCycle||r.payCycle||'monthly'].label+' pay cycle</div></div></div>'
-    +'<div class="payslip-grid">'
-      +'<div><div><b>'+esc(emp.firstName+' '+emp.lastName)+'</b></div><div>Employee no: '+esc(emp.employeeNo||'—')+'</div><div>Position: '+esc(emp.position||'—')+'</div><div>ID number: '+esc(emp.idNumber||'—')+'</div></div>'
-      +'<div><div>Tax number: '+esc(emp.taxNumber||'—')+'</div><div>UIF number: '+esc(emp.uifNumber||'—')+'</div><div>Bank: '+esc(emp.bankName||'—')+' '+esc(emp.accountNumber?('••••'+String(emp.accountNumber).slice(-4)):'')+'</div></div>'
-    +'</div>'
-    +'<table class="payslip-table"><thead><tr><th>Earnings</th><th style="text-align:right">Amount</th><th>Deductions</th><th style="text-align:right">Amount</th></tr></thead>'
-    +'<tbody>'
-      +'<tr><td>Basic pay this period</td><td style="text-align:right">'+fmtZAR(line.basic)+'</td><td>PAYE (income tax)</td><td style="text-align:right">'+fmtZAR(line.paye)+'</td></tr>'
-      +(line.overtimePay ? '<tr><td>Overtime ('+line.overtimeHours+' hrs @ '+line.overtimeRate+'x)</td><td style="text-align:right">'+fmtZAR(line.overtimePay)+'</td><td></td><td></td></tr>' : '')
-      +(line.sundayPay ? '<tr><td>Sunday time ('+line.sundayHours+' hrs @ '+line.sundayRate+'x)</td><td style="text-align:right">'+fmtZAR(line.sundayPay)+'</td><td></td><td></td></tr>' : '')
-      +(line.publicHolidayPay ? '<tr><td>Public holiday worked ('+line.publicHolidayHours+' hrs @ '+line.publicHolidayRate+'x)</td><td style="text-align:right">'+fmtZAR(line.publicHolidayPay)+'</td><td></td><td></td></tr>' : '')
-      +'<tr><td>Travel allowance</td><td style="text-align:right">'+fmtZAR(line.travelAllowance)+'</td><td>UIF (employee 1%)</td><td style="text-align:right">'+fmtZAR(line.uifEmployee)+'</td></tr>'
-      +'<tr><td>Other allowance</td><td style="text-align:right">'+fmtZAR(line.otherAllowance)+'</td><td>Pension/provident fund contribution</td><td style="text-align:right">'+fmtZAR(line.retirementDeduction)+'</td></tr>'
-      +(line.raContribution ? '<tr><td></td><td></td><td>Retirement annuity (RA)'+(line.raDeductedFromPay?'':' — paid privately, tax purposes only')+'</td><td style="text-align:right">'+fmtZAR(line.raDeductionFromPay)+'</td></tr>' : '')
-      +'<tr><td></td><td></td><td>Medical aid contribution</td><td style="text-align:right">'+fmtZAR(line.medicalAidDeduction)+'</td></tr>'
-      +'<tr><td></td><td></td><td>Other deductions</td><td style="text-align:right">'+fmtZAR(line.otherDeduction)+'</td></tr>'
-      +'<tr><td><b>Gross earnings</b></td><td style="text-align:right"><b>'+fmtZAR(line.gross)+'</b></td><td><b>Total deductions</b></td><td style="text-align:right"><b>'+fmtZAR(line.totalDeductions)+'</b></td></tr>'
-      +'<tr class="net-row"><td colspan="2">NET PAY</td><td colspan="2" style="text-align:right">'+fmtZAR(line.netPay)+'</td></tr>'
-    +'</tbody></table>'
-    +'<div class="disclaimer">Employer contributions (not deducted from net pay): UIF employer '+fmtZAR(line.uifEmployer)+', SDL employer '+fmtZAR(line.sdlEmployer)+'. Total cost to company: '+fmtZAR(line.employerCost)+'.'
-    +'<br>PAYE is calculated by annualising this employee\'s pay based on their '+PAY_CYCLES[line.payCycle||r.payCycle||'monthly'].label.toLowerCase()+' pay cycle ('+PAY_CYCLES[line.payCycle||r.payCycle||'monthly'].periodsPerYear+' periods/year) — the same method SARS\'s own weekly/fortnightly/monthly deduction tables use, for the '+ '2026/2027' +' tax year. Please have a registered payroll practitioner or tax professional verify figures before submission to SARS.</div>'
-  +'</div>';
+  var s = payslipSettingsOf(c);
+  var cyc = PAY_CYCLES[line.payCycle||r.payCycle||'monthly'];
+  var empName = (emp.firstName+' '+emp.lastName).trim()+(emp.nickname?' ('+emp.nickname+')':'');
+  var hourly = emp.payFrequency==='hourly';
+  var rate = ordinaryHourlyRate(emp);
+  // ----- header
+  var compLines = s.showCompanyAddress ? psLines(c.address) : [];
+  if(s.showCompanyRefs){
+    var refs = []; if(c.payeRef) refs.push('PAYE ref: '+c.payeRef); if(c.uifRef) refs.push('UIF ref: '+c.uifRef); if(c.sdlRef) refs.push('SDL ref: '+c.sdlRef);
+    if(refs.length) compLines.push(refs.join(' · '));
+  }
+  var head = '<table class="ps-t ps-head"><tr><td style="width:55%"><div class="ps-co">'+esc(c.name)+'</div>'
+    +compLines.map(function(l){ return '<div>'+esc(l)+'</div>'; }).join('')
+    +(s.headerNote?psLines(s.headerNote).map(function(l){return '<div>'+esc(l)+'</div>';}).join(''):'')+'</td>'
+    +'<td>'+(s.showPayDate?'<table class="ps-t"><tr><td class="ps-lbl" style="width:38%">Pay Date</td><td>'+esc(psDate(r.payDate))+'</td></tr>'
+      +(s.showPayCycle?'<tr><td class="ps-lbl">Pay cycle</td><td>'+esc(cyc.label)+'</td></tr>':'')+'</table>':'')+'</td></tr></table>';
+  // ----- employee block
+  var left = [['Employee', empName]];
+  if(s.showJobTitle) left.push(['Job title', emp.position||'']);
+  if(s.showEmployeeAddress) left.push(['Address', psLines(emp.address)]);
+  var right = [];
+  if(s.showEmployeeCode) right.push(['Employee Code', emp.employeeNo||'']);
+  if(s.showIdNumber) right.push(['Identity Number', emp.idNumber||'']);
+  if(s.showEmployedFrom) right.push(['Employed from', psDate(emp.startDate)]);
+  if(s.showRatePerHour) right.push(['Rate per hour', rate>0 ? rate.toFixed(5) : '']);
+  if(s.showTaxNumber) right.push(['Tax Number', emp.taxNumber||'']);
+  if(s.showUifNumber) right.push(['UIF Number', emp.uifNumber||'']);
+  if(s.showBank && (emp.bankName||emp.accountNumber)) right.push(['Bank', (emp.bankName||'')+(emp.accountNumber?' ••••'+String(emp.accountNumber).slice(-4):'')]);
+  var kv = function(rows){
+    return '<table class="ps-t">'+rows.map(function(x){
+      var v = Array.isArray(x[1]) ? x[1].map(function(l){return esc(l);}).join('<br>') : esc(x[1]);
+      return '<tr><td class="ps-lbl" style="width:34%">'+esc(x[0])+'</td><td>'+v+'</td></tr>';
+    }).join('')+'</table>';
+  };
+  var empBlock = '<table class="ps-t ps-emp"><tr><td style="width:55%">'+kv(left)+'</td><td>'+kv(right)+'</td></tr></table>';
+  // ----- earnings / deductions
+  var hide = !!s.hideZeroLines;
+  var E = [], D = [];
+  E.push({label:hourly?'Basic salary (hourly)':'Basic salary', units: hourly ? (line.normalHours||'') : '', amount:line.basic, always:true});
+  E.push({label:'Overtime @ '+line.overtimeRate+'x', units:line.overtimeHours, amount:line.overtimePay});
+  E.push({label:'Sunday time @ '+line.sundayRate+'x', units:line.sundayHours, amount:line.sundayPay});
+  E.push({label:'Public holiday worked @ '+line.publicHolidayRate+'x', units:line.publicHolidayHours, amount:line.publicHolidayPay});
+  E.push({label:'Travel allowance', units:'', amount:line.travelAllowance});
+  E.push({label:'Other allowance', units:'', amount:line.otherAllowance});
+  D.push({label:'PAYE (income tax)', amount:line.paye});
+  D.push({label:'Unemployment insurance fund', amount:line.uifEmployee});
+  D.push({label:'Pension/provident fund contribution', amount:line.retirementDeduction});
+  if(line.raContribution) D.push({label:'Retirement annuity (RA)'+(line.raDeductedFromPay?'':' — paid privately'), amount:line.raDeductionFromPay});
+  D.push({label:'Medical aid contribution', amount:line.medicalAidDeduction});
+  D.push({label:'Other deductions', amount:line.otherDeduction});
+  var keep = function(x){ return !hide || x.always || Number(x.amount)>0; };
+  E = E.filter(keep); D = D.filter(keep);
+  var n = Math.max(E.length, D.length, 1);
+  var uc = s.showUnits, oc = s.showOpeningBalance;
+  var cell = function(t,cls,style){ return '<td'+(cls?' class="'+cls+'"':'')+(style?' style="'+style+'"':'')+'>'+t+'</td>'; };
+  var rows = '';
+  for(var i=0;i<n;i++){
+    var e = E[i], d = D[i];
+    rows += '<tr>'
+      +cell(e?esc(e.label):'','', 'padding-top:7px;')
+      +(uc?cell(e&&e.units?esc(String(e.units)):'','r'):'')
+      +cell(e?psNum(e.amount):'','r')
+      +cell(d?esc(d.label):'','ps-gap')
+      +(oc?cell('','r'):'')
+      +cell(d?psNum(d.amount):'','r')+'</tr>';
+  }
+  var span = 1+(uc?1:0);
+  var headRow = '<tr class="ps-th">'+cell('Earnings')+(uc?cell('Units','r'):'')+cell('Amount','r')+cell('Deductions','ps-gap')+(oc?cell('Opening balance','r'):'')+cell('Amount','r')+'</tr>';
+  var totRow = '<tr class="ps-tot"><td>Total earnings</td>'+(uc?'<td></td>':'')+'<td class="r">'+psNum(line.gross)+'</td><td class="ps-gap">Total deductions</td>'+(oc?'<td></td>':'')+'<td class="r">'+psNum(line.totalDeductions)+'</td></tr>';
+  var netRow = '<tr><td colspan="'+(span+1)+'" style="border:0"></td><td class="ps-net ps-gap">Nett pay</td>'+(oc?'<td class="ps-net"></td>':'')+'<td class="ps-net r">'+psNum(line.netPay)+'</td></tr>';
+  var main = '<table class="ps-t ps-main">'+headRow+rows+totRow+netRow+'</table>';
+  // ----- lower section
+  var contrib = [];
+  if(line.uifEmployer>0 || !hide) contrib.push(['Unemployment insurance fund', line.uifEmployer]);
+  if(line.sdlEmployer>0) contrib.push(['Skills development levy', line.sdlEmployer]);
+  var ytd = ytdForEmployee(r, emp.id);
+  var ytdRows = [['Taxable earnings', ytd.taxable]];
+  if(s.showYtdFringe){ ytdRows.push(['Taxable company contributions',0]); ytdRows.push(['Taxable fringe benefits',0]); ytdRows.push(['Provision for tax on annual bonus',0]); }
+  ytdRows.push(['Tax paid', ytd.paye]);
+  var lower = '';
+  if(s.showCompanyContributions || s.showYtd){
+    var lc = s.showCompanyContributions ? contrib : [];
+    var rc = s.showYtd ? ytdRows : [];
+    var m = Math.max(lc.length, rc.length, 1);
+    var lrows = '';
+    for(var j=0;j<m;j++){
+      lrows += '<tr>'+(s.showCompanyContributions?cell(lc[j]?esc(lc[j][0]):'','')+cell(lc[j]?psNum(lc[j][1]):'','r'):'')
+        +(s.showYtd?cell(rc[j]?'<b>'+esc(rc[j][0])+'</b>':'','ps-gap')+cell(rc[j]?'<b>'+psNum(rc[j][1])+'</b>':'','r'):'')+'</tr>';
+    }
+    lower = '<table class="ps-t ps-low"><tr class="ps-th">'
+      +(s.showCompanyContributions?cell('Company Contributions')+cell('Amount','r'):'')
+      +(s.showYtd?cell('YTD Totals','ps-gap')+cell('Amount','r'):'')+'</tr>'+lrows+'</table>';
+  }
+  var foot = '';
+  if(s.showCostToCompany) foot += '<div class="ps-note">Total cost to company: '+psNum(line.employerCost)+'</div>';
+  if(s.footerNote) foot += psLines(s.footerNote).map(function(l){ return '<div class="ps-note">'+esc(l)+'</div>'; }).join('');
+  if(s.showDisclaimer) foot += '<div class="ps-note">PAYE is calculated by annualising this employee\'s pay based on their '+cyc.label.toLowerCase()+' pay cycle ('+cyc.periodsPerYear+' periods/year), for the 2026/2027 tax year. Please have a registered payroll practitioner or tax professional verify figures before submission to SARS.</div>';
+  return '<div class="ps-doc">'+head+empBlock+main+lower+foot+'</div>';
 }
 
 /* ---------- Leave ---------- */
@@ -1859,6 +2015,26 @@ function daysOr(v,d){ return (v===undefined||v===null||v==='') ? d : Number(v); 
 function capitalize(s){ return s ? s[0].toUpperCase()+s.slice(1) : s; }
 
 /* ---------- Company & Statutory Info ---------- */
+
+function renderPayslipSettingsCard(c){
+  var s = payslipSettingsOf(c);
+  var groups = PAYSLIP_SETTING_DEFS.map(function(g){
+    return '<div style="margin-bottom:12px;"><div class="label-caps" style="margin-bottom:6px;">'+esc(g.group.toUpperCase())+'</div>'
+      +g.items.map(function(it){
+        return '<label style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:13px;cursor:pointer;"><input type="checkbox" data-ps="'+it[0]+'"'+(s[it[0]]?' checked':'')+'> '+esc(it[1])+'</label>';
+      }).join('')+'</div>';
+  }).join('');
+  return '<div class="card" style="max-width:640px;margin-top:14px;">'
+    +'<div class="card-title" style="margin-bottom:4px;">Payslip layout</div>'
+    +'<div class="helptext" style="margin-top:0;">Choose what is printed on this company\'s payslips. The company address comes from the Address box above and the employee address from the employee record.</div>'
+    +groups
+    +'<div class="form-grid">'
+      +'<div class="form-field span2"><label>Extra text under the company name (optional)</label><textarea id="psHeaderNote" rows="2">'+esc(s.headerNote)+'</textarea></div>'
+      +'<div class="form-field span2"><label>Footer note at the bottom of every payslip (optional)</label><textarea id="psFooterNote" rows="2">'+esc(s.footerNote)+'</textarea></div>'
+    +'</div>'
+    +'<div class="modal-actions"><button class="btn" id="psResetBtn">Reset to default</button><button class="btn btn-primary" id="savePayslipSettingsBtn">Save payslip layout</button></div>'
+  +'</div>';
+}
 function renderCompany(){
   var c = currentCompany();
   if(!c) return '<div class="topbar"><h1>Company</h1></div><div class="card">No company selected.</div>';
@@ -1880,7 +2056,8 @@ function renderCompany(){
       +field('Default family resp. days/year','companyFamLeave',c.defaultFamilyRespDays)
     +'</div>'
     +'<div class="modal-actions"><button class="btn btn-primary" id="saveCompanyBtn">Save company details</button></div>'
-  +'</div>';
+  +'</div>'
+  +renderPayslipSettingsCard(c);
 }
 function field(label,id,val,type){
   return '<div class="form-field"><label>'+label+'</label><input type="'+(type||'text')+'" id="'+id+'" value="'+esc(val==null?'':val)+'"></div>';
@@ -3134,6 +3311,28 @@ function wireRouteEvents(){
     render();
   };
 
+  var savePsBtn = document.getElementById('savePayslipSettingsBtn');
+  if(savePsBtn) savePsBtn.onclick = async function(){
+    var c = currentCompany();
+    var s = {};
+    document.querySelectorAll('[data-ps]').forEach(function(el){ s[el.dataset.ps] = el.checked; });
+    s.headerNote = document.getElementById('psHeaderNote').value.trim();
+    s.footerNote = document.getElementById('psFooterNote').value.trim();
+    c.payslipSettings = s;
+    var ok = await saveCompany(c);
+    logActivity('company.payslip_layout', c.name);
+    if(ok!==false) alert('Payslip layout saved.');
+    render();
+  };
+  var resetPsBtn = document.getElementById('psResetBtn');
+  if(resetPsBtn) resetPsBtn.onclick = async function(){
+    if(!confirm('Reset this company\'s payslip layout to the default?')) return;
+    var c = currentCompany();
+    c.payslipSettings = Object.assign({}, PAYSLIP_DEFAULTS);
+    await saveCompany(c);
+    render();
+  };
+
   var exportBtn = document.getElementById('exportCsvBtn');
   if(exportBtn) exportBtn.onclick = exportReportsCsv;
 
@@ -3353,6 +3552,7 @@ function openEmployeeModal(id){
       +field('Tax number','fTax',e.taxNumber)+field('UIF number','fUif',e.uifNumber)
       +field('Position','fPosition',e.position)+field('Employee number','fEmpNo',e.employeeNo)
       +field('Start date','fStart',e.startDate,'date')+field('Email (for payslip delivery)','fEmail',e.email,'email')
+      +'<div class="form-field span2"><label>Home address (shown on the payslip)</label><textarea id="fAddress" rows="2">'+esc(e.address||'')+'</textarea></div>'
     +'</div>'
     +'<div class="section-title">Pay</div>'
     +'<div class="form-grid">'
@@ -3401,7 +3601,7 @@ function openEmployeeModal(id){
   document.getElementById('cancelEmpBtn').onclick = closeModal;
   document.getElementById('saveEmpBtn').onclick = async function(){
     e.firstName = val('fFirst'); e.lastName = val('fLast'); e.idNumber = val('fId'); e.dob = val('fDob');
-    e.taxNumber = val('fTax'); e.uifNumber = val('fUif'); e.position = val('fPosition'); e.employeeNo = val('fEmpNo');
+    e.taxNumber = val('fTax'); e.uifNumber = val('fUif'); e.position = val('fPosition'); e.employeeNo = val('fEmpNo'); e.address = document.getElementById('fAddress').value.trim();
     e.startDate = val('fStart'); e.email = val('fEmail'); e.payFrequency = val('fPayFreq'); e.payCycle = val('fPayCycle');
     e.basicSalary = numVal('fBasic'); e.hourlyRate = numVal('fHourly'); e.standardHours = numVal('fStdHours');
     e.travelAllowance = numVal('fTravel'); e.otherAllowance = numVal('fOther');
