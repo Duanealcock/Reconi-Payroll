@@ -2832,6 +2832,7 @@ function renderEmp501(){
     +'<div class="helptext">Retirement annuity contributions paid privately (not deducted through payroll) are excluded here — the employer can\'t certify amounts it didn\'t process; the employee claims those directly from their RA fund\'s own certificate. Confirm pension vs. provident fund source code (4001 vs. 4003) against each fund\'s registration before filing.</div>'
   +'</div>'
 
+  +easyCardHtml({payeVariance:payeVariance, uifVariance:uifVariance, missingPayrun:missingPayrun})
   +checklistCard('Pre-filing checklist — for your reviewing practitioner', e501Checklist)
 
   +'<div class="card" style="max-width:720px;">'
@@ -2846,7 +2847,7 @@ function renderEmp501(){
     +'<div class="modal-actions"><button class="btn btn-primary" id="saveEmp501Btn">Save</button></div>'
   +'</div>'
 
-  +'<div class="disclaimer">This is a reconciliation and certificate-figures aid, not a SARS submission and not a ready-to-import e@syFile file — SARS only accepts Employee Tax Certificate data via e@syFile Employer\'s own CSV import (built to its Business Requirements Specification) or manual capture, and there\'s no public third-party submission API. Use these totals to complete the actual EMP501 and generate real IRP5/IT3(a) certificates in e@syFile Employer or via SARS eFiling. Filing window dates shown for the current cycle are illustrative — always confirm the exact dates SARS has published for this reconciliation period. Have a registered payroll practitioner or tax professional verify these figures, especially source codes and ETI, before submission.</div>';
+  +'<div class="disclaimer">This is a reconciliation and certificate-figures aid, not a SARS submission. The e@syFile .txt above is an import file only — load it into e@syFile Employer (a TEST file first), review the certificates and EMP501 there, and submit from e@syFile / eFiling; there\'s no public third-party submission API. Filing window dates shown for the current cycle are illustrative — always confirm the exact dates SARS has published for this reconciliation period. Have a registered payroll practitioner or tax professional verify these figures, especially source codes and ETI, before submission.</div>';
 }
 /* ---------- IRP5 / IT3(a) certificate view ---------- */
 function irp5CertificateHtml(employeeId){
@@ -2913,6 +2914,468 @@ function exportEmp501Csv(){
       downloads.save({filename:filename, data: csv}).catch(function(){ fallbackCsv(csv); });
     } else { fallbackCsv(csv); }
   }).catch(function(){ fallbackCsv(csv); });
+}
+
+/* ---------- SARS e@syFile Employer import file (IRP5 / IT3(a) tax certificates) ----------
+   Tagged-text layout (tag,value pairs, one record per line, each line ending in tag 9999):
+     2010 = employer record · 3010 = one employee tax certificate · 6010 = trailer.
+   Built from a Sage-exported file that e@syFile Employer accepts. The tag meanings and the trailer
+   formulas were checked against that sample (record count, tag-code hash and amount total all
+   reproduce exactly) — but the official SARS Business Requirements Specification is the authority
+   and should be compared before first live use. Load a TEST file into e@syFile first. */
+var EASY_DEFAULTS = {
+  env:'LIVE', contactFirst:'', contactLast:'', phone:'', email:'', sic:'',
+  vendor:'RCNP01', it3aReason:'02',
+  addrNo:'', addrStreet:'', addrSuburb:'', addrCity:'', addrPostal:''
+};
+function easySettingsOf(co){
+  var s = Object.assign({}, EASY_DEFAULTS);
+  var saved = co && co.payslipSettings && co.payslipSettings._easyFile;
+  if(saved) Object.keys(saved).forEach(function(k){ if(k in EASY_DEFAULTS) s[k] = saved[k]; });
+  return s;
+}
+function easyTrim(v){ return String(v==null?'':v).replace(/\s+/g,' ').trim(); }
+function easyQ(v){ return '"'+easyTrim(v).replace(/"/g,"'")+'"'; }
+function easyDigits(v){ return String(v==null?'':v).replace(/\D/g,''); }
+function easyYmd(iso){ return iso ? String(iso).slice(0,10).replace(/-/g,'') : ''; }
+function easyLuhnOk(n){
+  if(!/^\d+$/.test(n)) return false;
+  var s=0;
+  for(var i=0;i<n.length;i++){
+    var d = Number(n.charAt(n.length-1-i));
+    if(i%2===1){ d*=2; if(d>9) d-=9; }
+    s+=d;
+  }
+  return s%10===0;
+}
+function easyParseAddress(text){
+  var parts = String(text||'').split(/\r?\n|,/).map(easyTrim).filter(Boolean);
+  var postal = '';
+  if(parts.length){
+    var m = parts[parts.length-1].match(/^(.*?)\s*(\d{4})$/);
+    if(m){ postal = m[2]; if(m[1]) parts[parts.length-1] = m[1]; else parts.pop(); }
+  }
+  var n = parts.length, no = '', street = parts[0]||'', suburb = '', city = '';
+  var m2 = street.match(/^(\d+[A-Za-z]?)\s+(.+)$/);
+  if(m2){ no = m2[1]; street = m2[2]; }
+  if(n>=3){ city = parts[n-1]; suburb = parts[n-2]; }
+  else if(n===2){ city = parts[1]; }
+  return {no:no, street:street, suburb:suburb, city:city, postal:postal};
+}
+function easyEmployerAddress(c, S){
+  if(S.addrStreet || S.addrCity || S.addrPostal)
+    return {no:S.addrNo, street:S.addrStreet, suburb:S.addrSuburb, city:S.addrCity, postal:S.addrPostal};
+  return easyParseAddress(c && c.address);
+}
+function easyLastDay(y, m){ return localISO(new Date(y, m, 0)); }
+
+/* Per-employee totals from finalized pay runs in the reconciliation period. */
+function easyCollect(cache){
+  var months = emp501MonthsInRange(cache.range), agg = {};
+  months.forEach(function(mo){
+    companyPayruns().filter(function(r){ return r.status==='finalized' && r.periodYear===mo.year && r.periodMonth===mo.month; }).forEach(function(r){
+      (r.lines||[]).forEach(function(l){
+        var a = agg[l.employeeId] || (agg[l.employeeId] = {employeeId:l.employeeId, periods:0, basic:0, ot:0, travel:0, other:0, ret:0, ra:0, med:0, paye:0, uif:0, sdl:0, credit:0});
+        var ot = (l.overtimePay||0)+(l.sundayPay||0)+(l.publicHolidayPay||0);
+        var travel = l.travelAllowance||0, other = l.otherAllowance||0;
+        a.periods++;
+        a.ot += ot; a.travel += travel; a.other += other;
+        a.basic += (l.gross||0) - ot - travel - other;
+        a.ret += l.retirementDeduction||0;
+        a.ra += l.raDeductionFromPay != null ? (l.raDeductionFromPay||0) : (l.raDeductedFromPay ? (l.raContribution||0) : 0);
+        a.med += l.medicalAidDeduction||0;
+        a.paye += l.paye||0;
+        a.uif += (l.uifEmployee||0)+(l.uifEmployer||0);
+        a.sdl += l.sdlEmployer||0;
+        if((l.paye||0)>0 && l.medicalCreditMonthly){
+          var cyc = PAY_CYCLES[l.payCycle] ? PAY_CYCLES[l.payCycle].periodsPerYear : 12;
+          a.credit += l.medicalCreditMonthly*12/cyc;
+        }
+      });
+    });
+  });
+  return agg;
+}
+
+/* Build the whole file + validation results. ctx = {payeVariance, uifVariance, missingPayrun} */
+function easyBuild(ctx){
+  ctx = ctx || {};
+  var cache = emp501Cache, c = cache.c, S = easySettingsOf(c);
+  var errors = [], warnings = [];
+  var err = function(who, msg){ errors.push({who:who, msg:msg}); };
+  var warn = function(who, msg){ warnings.push({who:who, msg:msg}); };
+
+  var taxYear = cache.periodType==='interim' ? cache.periodYear+1 : cache.periodYear;
+  var periodYm = cache.periodYear*100 + (cache.periodType==='interim' ? 8 : 2);
+  var taxYearStart = (taxYear-1)+'-03-01';
+  var rangeEnd = easyLastDay(cache.range.endYear, cache.range.endMonth);
+
+  /* ----- employer ----- */
+  var E = 'Employer';
+  var payeRef = easyDigits(c.payeRef);
+  var sdlRef = String(c.sdlRef||'').replace(/\s+/g,'').toUpperCase();
+  var uifRef = String(c.uifRef||'').replace(/\s+/g,'').toUpperCase();
+  var addr = easyEmployerAddress(c, S);
+  var sic = easyDigits(S.sic);
+  var phone = easyDigits(S.phone);
+  var vendor = String(S.vendor||'').replace(/[^A-Za-z0-9]/g,'').toUpperCase();
+  if(!easyTrim(c.name)) err(E,'Company name is missing (Company & Statutory Info).');
+  if(!/^7\d{9}$/.test(payeRef)) err(E,'PAYE reference number must be 10 digits starting with 7 (Company & Statutory Info). Currently: '+(c.payeRef||'blank')+'.');
+  if(!/^L\d{9}$/.test(sdlRef)) (c.sdlApplicable ? err : warn)(E,'SDL reference should be "L" followed by 9 digits (Company & Statutory Info). Currently: '+(c.sdlRef||'blank')+'.');
+  if(!/^U\d{9}$/.test(uifRef)) warn(E,'UIF reference should be "U" followed by 9 digits (Company & Statutory Info). Currently: '+(c.uifRef||'blank')+'.');
+  if(!easyTrim(S.contactFirst) || !easyTrim(S.contactLast)) err(E,'Contact person first name and surname are required (Export settings).');
+  if(phone.length<10) err(E,'Contact phone number must be at least 10 digits (Export settings).');
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(S.email||'')) err(E,'A valid contact e-mail address is required (Export settings).');
+  if(!/^\d{5}$/.test(sic)) err(E,'SIC code must be 5 digits (Export settings) — the industry code of the business.');
+  if(!addr.street) err(E,'Employer street address is missing (Export settings or Company address).');
+  if(!addr.city) err(E,'Employer city/town is missing (Export settings or Company address).');
+  if(!/^\d{4}$/.test(addr.postal)) err(E,'Employer postal code must be 4 digits (Export settings or end of Company address).');
+  if(vendor.length!==6) err(E,'The 6-character certificate source code in Export settings is invalid (used inside each certificate number).');
+  if(S.env!=='LIVE') warn(E,'File is marked TEST — SARS will not treat it as a live submission.');
+
+  var employerRec = [
+    ['2010', easyQ(c.name)], ['2015', easyQ(S.env==='TEST'?'TEST':'LIVE')], ['2020', payeRef],
+    ['2022', easyQ(sdlRef)], ['2024', easyQ(uifRef)], ['2025', easyQ(S.contactFirst)], ['2036', easyQ(S.contactLast)],
+    ['2026', easyQ(phone)], ['2027', easyQ(S.email)], ['2028', easyQ('Reconi')], ['2029', easyQ('Reconi Payroll')],
+    ['2030', String(taxYear)], ['2031', String(periodYm)], ['2081','ZA'], ['2037','N'],
+    ['2063', easyQ(addr.no)], ['2064', easyQ(addr.street)], ['2065', easyQ(addr.suburb)], ['2066', easyQ(addr.city)],
+    ['2080', addr.postal], ['2082', sic]
+  ];
+
+  /* ----- employees → certificates ----- */
+  var agg = easyCollect(cache);
+  var rows = cache.empRows.slice();
+  var certs = [], records = [employerRec];
+  var counts = {irp5:0, it3a:0};
+  var totals = {income:0, paye:0, uif:0, sdl:0, deductions:0};
+  var seenId = {}, seenTax = {}, seenCode = {};
+  var nowYY = new Date().getFullYear() % 100;
+
+  rows.forEach(function(row, idx){
+    var emp = employeeById(row.employeeId);
+    var a = agg[row.employeeId];
+    var who = row.employeeName || 'Employee';
+    if(!emp || !a){ err(who,'Employee record or pay-run data is missing.'); return; }
+
+    var surname = easyTrim(emp.lastName), first = easyTrim(emp.firstName);
+    var initials = first.split(' ').filter(Boolean).map(function(w){ return w.charAt(0).toUpperCase(); }).join('');
+    if(!surname) err(who,'Surname is missing.');
+    if(!first) err(who,'First name is missing.');
+    if(/[^\x20-\x7E]/.test(surname+first)) warn(who,'Name contains special characters — check they import correctly into e@syFile.');
+
+    var id = easyDigits(emp.idNumber);
+    if(id.length!==13) err(who,'A 13-digit SA ID number is required (passport holders are not supported by this export yet).');
+    else if(!saIdCheckDigitValid(id)) err(who,'ID number '+id+' fails the check-digit test — likely mistyped.');
+    var dobFromId = '';
+    if(id.length===13){
+      var yy = Number(id.slice(0,2));
+      var iso = ((yy>nowYY?1900:2000)+yy)+'-'+id.slice(2,4)+'-'+id.slice(4,6);
+      var dchk = new Date(iso+'T00:00:00');
+      if(isNaN(dchk.getTime()) || localISO(dchk)!==iso) err(who,'The date of birth inside the ID number ('+id.slice(0,6)+') is not a real date.');
+      else dobFromId = iso;
+    }
+    if(dobFromId && emp.dob && emp.dob!==dobFromId) warn(who,'Captured date of birth ('+emp.dob+') differs from the one in the ID number ('+dobFromId+'); the ID number date is exported.');
+    var dob = dobFromId || emp.dob || '';
+    if(!dob) err(who,'Date of birth is missing.');
+    if(id && seenId[id]) err(who,'Duplicate ID number — also used by '+seenId[id]+'.'); else if(id) seenId[id] = who;
+
+    var paye = Math.round(a.paye*100)/100;
+    var isIrp5 = paye > 0;
+    var tax = String(emp.taxNumber||'').replace(/\s+/g,'');
+    if(!tax){
+      (isIrp5 ? err : warn)(who, isIrp5 ? 'Income tax reference number is required on an IRP5 (PAYE was deducted).' : 'No income tax reference number — acceptable on an IT3(a) but SARS may query it.');
+    } else if(!/^\d{10}$/.test(tax)) err(who,'Income tax reference number must be 10 digits. Currently: '+emp.taxNumber+'.');
+    else if(!easyLuhnOk(tax)) err(who,'Income tax reference number '+tax+' fails the SARS modulus-10 check — likely mistyped.');
+    if(tax){ if(seenTax[tax]) err(who,'Duplicate income tax number — also used by '+seenTax[tax]+'.'); else seenTax[tax] = who; }
+
+    var code = easyTrim(emp.employeeNo);
+    if(!code){ code = String(idx+1).padStart(3,'0'); warn(who,'No employee number captured — "'+code+'" was used. Add one under Employees.'); }
+    if(seenCode[code]) err(who,'Duplicate employee number '+code+' — also used by '+seenCode[code]+'.'); else seenCode[code] = who;
+
+    if(!emp.startDate) err(who,'Employment start date is missing.');
+    var from = (emp.startDate && emp.startDate > taxYearStart) ? emp.startDate : taxYearStart;
+    var to = (emp.terminationDate && emp.terminationDate >= from && emp.terminationDate <= rangeEnd) ? emp.terminationDate : rangeEnd;
+    if(emp.startDate && emp.startDate > rangeEnd) err(who,'Start date is after the end of this reconciliation period.');
+    if(emp.terminationDate && emp.terminationDate < from) err(who,'Termination date is before the employment/period start.');
+    var partYear = from > taxYearStart || to < rangeEnd;
+
+    var cyc = PAY_CYCLES[payCycleOf(emp)] || PAY_CYCLES.monthly;
+    var periodsInYear = cyc.periodsPerYear;
+    var empAddr = easyParseAddress(emp.address);
+    if(!easyTrim(emp.address)){
+      empAddr = addr;
+      warn(who,'No home address captured — the employer address was used. Add the residential address under Employees.');
+    } else {
+      if(!empAddr.street) err(who,'Home address has no street line.');
+      if(!/^\d{4}$/.test(empAddr.postal)) warn(who,'Home address should end with a 4-digit postal code (so it can be split into the address fields).');
+    }
+
+    var bankOk = !!(emp.accountNumber && emp.branchCode);
+    if(emp.accountNumber && !emp.branchCode) warn(who,'Bank account captured without a branch code — paid-by-cash method exported.');
+    if(emp.branchCode && !/^\d{6}$/.test(easyDigits(emp.branchCode))) warn(who,'Branch code should be 6 digits.');
+
+    /* amounts: whole rand for income/deduction codes, cents for tax codes */
+    var inc = {
+      '3601': Math.round(a.basic), '3607': Math.round(a.ot), '3701': Math.round(a.travel), '3713': Math.round(a.other)
+    };
+    var income = 0; Object.keys(inc).forEach(function(k){ income += inc[k]; });
+    var ded = { '4001': Math.round(a.ret), '4006': Math.round(a.ra), '4005': Math.round(a.med) };
+    var deductions = 0; Object.keys(ded).forEach(function(k){ deductions += ded[k]; });
+    var uif = Math.round(a.uif*100)/100, sdl = Math.round(a.sdl*100)/100;
+    var credit = Math.round(a.credit*100)/100;
+    var taxTotal = Math.round((paye+uif+sdl)*100)/100;
+
+    if(income<=0) err(who,'Total remuneration is zero or negative — nothing to certify.');
+    if(a.basic<0) err(who,'Basic pay works out negative — check the pay-run lines.');
+    if(deductions>income) warn(who,'Deductions exceed income.');
+    if(paye>income) err(who,'PAYE is higher than total income.');
+    if(a.periods<1) err(who,'No finalized pay runs in this period.');
+
+    var seq = String(certs.length+1).padStart(8,'0');
+    var certNo = payeRef + String(taxYear*100 + (cache.periodType==='interim' ? 8 : 2)) + vendor + seq;
+
+    var rec = [
+      ['3010', easyQ(certNo)], ['3015', easyQ(isIrp5?'IRP5':'IT3(a)')], ['3020', easyQ('A')], ['3025', String(taxYear)],
+      ['3030', easyQ(surname)], ['3040', easyQ(first)], ['3050', easyQ(initials)], ['3060', id], ['3080', easyYmd(dob)],
+      ['3100', tax], ['3263', sic], ['3125', easyQ(S.email)], ['3136', easyQ(phone)],
+      ['3146', easyQ(addr.no)], ['3147', easyQ(addr.street)], ['3148', easyQ(addr.suburb)], ['3149', easyQ(addr.city)], ['3150', easyQ(addr.postal)], ['3151', easyQ('ZA')],
+      ['3160', easyQ(code)], ['3170', easyYmd(from)], ['3180', easyYmd(to)], ['3190', easyYmd(emp.startDate)]
+    ];
+    if(isIrp5) rec.push(['3195', easyQ('N')]);
+    rec.push(['3285', easyQ('ZA')], ['3200', periodsInYear.toFixed(4)], ['3210', a.periods.toFixed(4)]);
+    if(isIrp5) rec.push(['3220', easyQ(partYear?'Y':'N')]);
+    rec.push(['3213', easyQ(empAddr.no)], ['3214', easyQ(empAddr.street)], ['3215', easyQ(empAddr.suburb)], ['3216', easyQ(empAddr.city)], ['3217', easyQ(empAddr.postal)], ['3279', easyQ('N')]);
+    if(bankOk){
+      rec.push(['3240','2'], ['3241', easyQ(easyDigits(emp.accountNumber))], ['3242', easyDigits(emp.branchCode)], ['3245', easyQ(surname)], ['3246', /sav/i.test(emp.accountType||'') ? '2' : '1']);
+    } else rec.push(['3240','0']);
+    rec.push(['3288', easyQ('1')], ['3026', easyQ('N')]);
+    ['3601','3607','3701','3713'].forEach(function(k){ if(inc[k]>0) rec.push([k, String(inc[k])]); });
+    rec.push(['3699', String(income)]);
+    ['4001','4006','4005'].forEach(function(k){ if(ded[k]>0) rec.push([k, String(ded[k])]); });
+    if(deductions>0) rec.push(['4497', String(deductions)]);
+    if(paye>0) rec.push(['4102', paye.toFixed(2)]);
+    if(paye>0 && credit>0) rec.push(['4116', credit.toFixed(2)]);
+    if(uif>0) rec.push(['4141', uif.toFixed(2)]);
+    if(sdl>0) rec.push(['4142', sdl.toFixed(2)]);
+    rec.push(['4149', taxTotal.toFixed(2)]);
+    if(!isIrp5) rec.push(['4150', String(S.it3aReason||'02')]);
+
+    records.push(rec);
+    certs.push({who:who, type:isIrp5?'IRP5':'IT3(a)', income:income, paye:paye, certNo:certNo});
+    if(isIrp5) counts.irp5++; else counts.it3a++;
+    totals.income += income; totals.paye += paye; totals.uif += uif; totals.sdl += sdl; totals.deductions += deductions;
+  });
+
+  if(!certs.length) err('File','No employee certificates could be built for this period.');
+  if(ctx.missingPayrun && ctx.missingPayrun.length) warn('Reconciliation','No finalized pay run for '+ctx.missingPayrun.join(', ')+' — certificates for those months would be incomplete.');
+  if(ctx.payeVariance!=null && Math.abs(ctx.payeVariance)>=1) warn('Reconciliation','PAYE on certificates differs from the EMP201s by '+fmtZAR(ctx.payeVariance)+' — SARS compares these on submission.');
+  if(ctx.uifVariance!=null && Math.abs(ctx.uifVariance)>=1) warn('Reconciliation','UIF on certificates differs from the EMP201s by '+fmtZAR(ctx.uifVariance)+'.');
+
+  /* trailer */
+  var hash = 0, amount = 0;
+  records.forEach(function(r, ri){
+    r.forEach(function(p){
+      hash += Number(p[0]);
+      if(ri>0 && Number(p[0])>=3600) amount += parseFloat(p[1]);
+    });
+    hash += 9999;
+  });
+  amount = Math.round(amount*100)/100;
+  var all = records.concat([[['6010', String(records.length)], ['6020', String(hash)], ['6030', amount.toFixed(2)]]]);
+  var text = all.map(function(r){
+    return r.map(function(p){ return p[0]+','+p[1]; }).concat(['9999']).join(',');
+  }).join('\r\n')+'\r\n';
+
+  /* self-check: re-read our own file with the same checker used for uploaded files */
+  var selfCheck = easyCheckFile(text);
+  selfCheck.errors.forEach(function(m){ if(/^Trailer|end-of-record|30 characters|duplicate certificate/.test(m)) err('File check', m); });
+
+  return {errors:errors, warnings:warnings, certs:certs, counts:counts, totals:totals, text:text,
+          filename:(cache.periodType==='interim'?'Mid_':'Annual_')+taxYear+'.txt', taxYear:taxYear, period:periodYm};
+}
+
+/* ---------- Read + check any e@syFile file (ours or another payroll's) ---------- */
+function easyParseLine(line){
+  var toks = [], i = 0, n = line.length;
+  while(i<=n){
+    if(line.charAt(i)==='"'){
+      var j = i+1, s = '';
+      while(j<n){
+        if(line.charAt(j)==='"'){ if(line.charAt(j+1)==='"'){ s+='"'; j+=2; continue; } break; }
+        s += line.charAt(j); j++;
+      }
+      toks.push(s);
+      i = j+1;
+      if(line.charAt(i)===',') i++; else break;
+    } else {
+      var k = line.indexOf(',', i);
+      if(k<0){ toks.push(line.slice(i)); break; }
+      toks.push(line.slice(i,k));
+      i = k+1;
+      if(i===n){ toks.push(''); break; }
+    }
+  }
+  var pairs = [];
+  for(var t=0;t+1<toks.length;t+=2) pairs.push([toks[t].trim(), toks[t+1]]);
+  var last = toks[toks.length-1];
+  return {pairs:pairs, terminated:(toks.length%2===1 && String(last).trim()==='9999')};
+}
+function easyCheckFile(text){
+  var errors = [], info = {};
+  var lines = String(text||'').split(/\r?\n/).filter(function(l){ return l.trim()!==''; });
+  if(!lines.length){ return {errors:['The file is empty.'], info:info}; }
+  var recs = lines.map(easyParseLine);
+  var trailer = recs[recs.length-1];
+  var trailerMap = {}; trailer.pairs.forEach(function(p){ trailerMap[p[0]] = p[1]; });
+  if(trailerMap['6010']===undefined) errors.push('The last line is not a 6010 trailer record.');
+  var body = recs.filter(function(r,i){ return !(i===recs.length-1 && trailerMap['6010']!==undefined); });
+  var hash = 0, amount = 0, certNos = {}, irp5 = 0, it3a = 0, sumIncome = 0;
+  body.forEach(function(r, ri){
+    var m = {}; r.pairs.forEach(function(p){ m[p[0]] = p[1]; hash += Number(p[0])||0; });
+    hash += 9999;
+    var label = 'Line '+(ri+1);
+    if(!r.terminated) errors.push(label+' does not end with the 9999 end-of-record tag.');
+    if(ri===0){
+      if(m['2010']===undefined) errors.push('The first line must be the 2010 employer record.');
+      if(!/^7\d{9}$/.test(m['2020']||'')) errors.push('Employer PAYE reference (2020) must be 10 digits starting with 7.');
+      return;
+    }
+    if(m['3010']===undefined){ errors.push(label+' is not a 3010 certificate record.'); return; }
+    var who = (m['3030']||'?')+' '+(m['3050']||'');
+    if(String(m['3010']).length!==30) errors.push(who+': certificate number (3010) must be 30 characters.');
+    if(certNos[m['3010']]) errors.push(who+': duplicate certificate number '+m['3010']+'.');
+    certNos[m['3010']] = true;
+    var isIrp5 = m['3015']==='IRP5';
+    if(m['3015']!=='IRP5' && m['3015']!=='IT3(a)') errors.push(who+': certificate type (3015) must be IRP5 or IT3(a).');
+    if(isIrp5) irp5++; else it3a++;
+    if(isIrp5 && !(parseFloat(m['4102'])>0)) errors.push(who+': an IRP5 needs PAYE (4102).');
+    if(!isIrp5 && m['4102']!==undefined) errors.push(who+': an IT3(a) must not carry PAYE (4102).');
+    if(!isIrp5 && m['4150']===undefined) errors.push(who+': an IT3(a) needs a reason code (4150).');
+    if(!/^\d{8}$/.test(m['3080']||'')) errors.push(who+': date of birth (3080) must be YYYYMMDD.');
+    if(!/^\d{8}$/.test(m['3170']||'') || !/^\d{8}$/.test(m['3180']||'')) errors.push(who+': period from/to (3170/3180) must be YYYYMMDD.');
+    else if(m['3170']>m['3180']) errors.push(who+': period start (3170) is after period end (3180).');
+    if(!/^\d{13}$/.test(m['3060']||'') || !saIdCheckDigitValid(m['3060']||'')) errors.push(who+': ID number (3060) is missing or fails the check digit.');
+    if(m['3100'] && (!/^\d{10}$/.test(m['3100']) || !easyLuhnOk(m['3100']))) errors.push(who+': tax number (3100) fails the 10-digit modulus-10 check.');
+    var inc = 0, ded = 0;
+    r.pairs.forEach(function(p){
+      var code = Number(p[0]), v = parseFloat(p[1]);
+      if(code>=3600 && !isNaN(v)) amount += v;
+      if(code>=3601 && code<=3898 && code!==3699 && !isNaN(v)) inc += v;
+      if(((code>=4001 && code<=4099) || (code>=4400 && code<=4496)) && !isNaN(v)) ded += v;
+    });
+    if(Math.abs(inc-(parseFloat(m['3699'])||0))>0.5) errors.push(who+': income codes add up to '+inc+' but 3699 says '+(m['3699']||0)+'.');
+    if(Math.abs(ded-(parseFloat(m['4497'])||0))>0.5) errors.push(who+': deduction codes add up to '+ded+' but 4497 says '+(m['4497']||0)+'.');
+    var taxSum = (parseFloat(m['4102'])||0)+(parseFloat(m['4141'])||0)+(parseFloat(m['4142'])||0);
+    if(Math.abs(taxSum-(parseFloat(m['4149'])||0))>0.005) errors.push(who+': PAYE + UIF + SDL = '+taxSum.toFixed(2)+' but 4149 says '+(m['4149']||0)+'.');
+    sumIncome += parseFloat(m['3699'])||0;
+  });
+  amount = Math.round(amount*100)/100;
+  if(trailerMap['6010']!==undefined){
+    if(Number(trailerMap['6010'])!==body.length) errors.push('Trailer record count (6010) is '+trailerMap['6010']+' but the file has '+body.length+' records.');
+    if(Number(trailerMap['6020'])!==hash) errors.push('Trailer hash total (6020) is '+trailerMap['6020']+' but the file adds up to '+hash+'.');
+    if(Math.abs(parseFloat(trailerMap['6030'])-amount)>0.005) errors.push('Trailer amount total (6030) is '+trailerMap['6030']+' but the file adds up to '+amount.toFixed(2)+'.');
+  }
+  info = {records:body.length, irp5:irp5, it3a:it3a, income:sumIncome, hash:hash, amount:amount};
+  return {errors:errors, info:info};
+}
+
+/* ---------- Screen: card, download, settings, file check ---------- */
+function easyIssuesHtml(list, cls){
+  if(!list.length) return '';
+  var color = cls==='err' ? '#c0392b' : '#9c6a15';
+  return '<ul style="margin:6px 0 10px 18px;padding:0;font-size:12.5px;line-height:1.7;color:'+color+'">'
+    +list.slice(0,60).map(function(i){ return '<li><b>'+esc(i.who)+':</b> '+esc(i.msg)+'</li>'; }).join('')
+    +(list.length>60?'<li>…and '+(list.length-60)+' more.</li>':'')+'</ul>';
+}
+function easyCardHtml(ctx){
+  var r = easyBuild(ctx);
+  var ok = r.errors.length===0;
+  return '<div class="card no-print" id="easyCard">'
+    +'<div class="section-title">Tax certificate file for SARS — e@syFile import (IRP5 / IT3(a))</div>'
+    +'<div class="helptext">Creates the tagged .txt file that e@syFile Employer can import for this reconciliation: one employer record, one certificate per employee (IRP5 where PAYE was deducted, otherwise IT3(a)) and the trailer totals. Fix every red item first, then import the file into e@syFile, review and submit from there.</div>'
+    +'<div class="stat-grid" style="margin-bottom:10px;">'
+      +statCard('CERTIFICATES', r.certs.length, r.counts.irp5+' IRP5 · '+r.counts.it3a+' IT3(a)')
+      +statCard('TOTAL REMUNERATION (3699)', fmtZAR(r.totals.income), 'All certificates')
+      +statCard('PAYE (4102)', fmtZAR(r.totals.paye), 'Employees\' tax')
+      +statCard('FILE NAME', '<span style="font-size:15px">'+esc(r.filename)+'</span>', 'Tax year '+r.taxYear+' · period '+r.period)
+    +'</div>'
+    +(ok ? '<div class="integrity-box">✓ No blocking errors — the trailer (record count, hash and amount totals) was verified against the file.</div>'
+         : '<div class="integrity-box integrity-warn" style="background:#fdeceb;color:#c0392b;">'+r.errors.length+' blocking error(s) to fix before the file can be exported</div>')
+    +easyIssuesHtml(r.errors,'err')
+    +(r.warnings.length ? '<div style="font-weight:700;font-size:12.5px;color:#9c6a15;">'+r.warnings.length+' warning(s) to review</div>'+easyIssuesHtml(r.warnings,'warn') : '')
+    +'<div class="page-actions no-print">'
+      +'<button class="btn btn-gold" id="easyDownloadBtn"'+(ok?'':' disabled')+'>Download e@syFile .txt</button>'
+      +'<button class="btn" id="easySettingsBtn">Employer &amp; export settings</button>'
+      +'<button class="btn" id="easyCheckBtn">Check an existing file…</button>'
+      +'<input type="file" id="easyCheckInput" accept=".txt,text/plain" style="display:none">'
+      +(ok?'':' <span class="link-btn" id="easyForceBtn">Export anyway (for review only)</span>')
+    +'</div>'
+    +'<div class="helptext" style="margin-top:10px;">Field mapping used: income 3601 basic pay · 3607 overtime / Sunday / public-holiday pay · 3701 travel allowance · 3713 other allowances · 3699 total; deductions 4001 retirement fund · 4006 RA deducted from pay · 4005 medical aid · 4497 total; 4102 PAYE · 4116 medical credit · 4141 UIF (employee + employer) · 4142 SDL · 4149 total. Code meanings were inferred from a working Sage export and common SARS usage — compare with the current SARS e@syFile specification and import a TEST file first.</div>'
+  +'</div>';
+}
+function downloadEasyFile(force){
+  if(!emp501Cache) return;
+  var r = easyBuild({});
+  if(r.errors.length && !force){ alert('Fix the red errors on this page first.'); return; }
+  if(r.errors.length && !confirm('This file still has '+r.errors.length+' error(s) and SARS will probably reject it. Export for review only?')) return;
+  var text = r.text, filename = r.filename;
+  claude.use('downloads').then(function(downloads){
+    if(downloads){ downloads.save({filename:filename, data:text}).catch(function(){ easyFallbackText(text); }); }
+    else easyFallbackText(text);
+  }).catch(function(){ easyFallbackText(text); });
+  logActivity('emp501.easyfile', filename);
+}
+function easyFallbackText(text){
+  try{
+    var blob = new Blob([text], {type:'text/plain'});
+    var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'e@syFile.txt';
+    document.body.appendChild(a); a.click(); a.remove();
+  }catch(e){ alert('Download isn\'t available in this view — here is the start of the file:\n\n'+text.slice(0,2000)); }
+}
+function openEasySettingsModal(){
+  var c = currentCompany(), S = easySettingsOf(c);
+  openModal(''
+    +'<h2>Employer &amp; export settings — e@syFile</h2>'
+    +'<div class="helptext">The PAYE, SDL and UIF reference numbers and company name come from Company &amp; Statutory Info. Everything else the SARS employer record needs is captured here.</div>'
+    +'<div class="form-grid">'
+      +'<div class="form-field"><label>File type</label><select id="ezEnv"><option value="LIVE"'+(S.env==='LIVE'?' selected':'')+'>LIVE submission</option><option value="TEST"'+(S.env==='TEST'?' selected':'')+'>TEST</option></select></div>'
+      +field('SIC code (5 digits)','ezSic',S.sic)
+      +field('Contact person — first name','ezFirst',S.contactFirst)+field('Contact person — surname','ezLast',S.contactLast)
+      +field('Contact phone','ezPhone',S.phone)+field('Contact e-mail','ezEmail',S.email,'email')
+      +field('Street number','ezNo',S.addrNo)+field('Street name','ezStreet',S.addrStreet)
+      +field('Suburb','ezSuburb',S.addrSuburb)+field('City / town','ezCity',S.addrCity)
+      +field('Postal code','ezPostal',S.addrPostal)
+      +field('Certificate source code (6 characters)','ezVendor',S.vendor)
+      +field('IT3(a) reason code','ezReason',S.it3aReason)
+    +'</div>'
+    +'<div class="helptext">Leave the address fields blank to use the Company address instead. The certificate source code is part of every 30-character certificate number (PAYE ref + period + source code + sequence).</div>'
+    +'<div class="modal-actions"><button class="btn" id="ezCancel">Cancel</button><button class="btn btn-primary" id="ezSave">Save</button></div>');
+  document.getElementById('ezCancel').onclick = closeModal;
+  document.getElementById('ezSave').onclick = async function(){
+    var s = {
+      env:val('ezEnv'), sic:val('ezSic'), contactFirst:val('ezFirst'), contactLast:val('ezLast'), phone:val('ezPhone'), email:val('ezEmail'),
+      addrNo:val('ezNo'), addrStreet:val('ezStreet'), addrSuburb:val('ezSuburb'), addrCity:val('ezCity'), addrPostal:val('ezPostal'),
+      vendor:val('ezVendor')||EASY_DEFAULTS.vendor, it3aReason:val('ezReason')||EASY_DEFAULTS.it3aReason
+    };
+    c.payslipSettings = Object.assign({}, c.payslipSettings||{}, {_easyFile:s});
+    var ok = await saveCompany(c);
+    logActivity('company.easyfile_settings', c.name);
+    closeModal();
+    if(ok===false) alert('Settings could not be saved — see the sync message.');
+    render();
+  };
+}
+function easyShowFileCheck(fileName, text){
+  var r = easyCheckFile(text);
+  var i = r.info;
+  openModal(''
+    +'<h2>File check — '+esc(fileName)+'</h2>'
+    +(i.records!=null ? '<div class="stat-caption" style="margin-bottom:10px;">'+i.records+' records · '+i.irp5+' IRP5 · '+i.it3a+' IT3(a) · total remuneration '+fmtZAR(i.income)+'</div>' : '')
+    +(r.errors.length
+      ? '<div class="integrity-box integrity-warn" style="background:#fdeceb;color:#c0392b;">'+r.errors.length+' problem(s) found</div>'+easyIssuesHtml(r.errors.map(function(m){ return {who:'File',msg:m}; }),'err')
+      : '<div class="integrity-box">✓ Structure, certificate rules and trailer totals all check out.</div>')
+    +'<div class="modal-actions"><button class="btn btn-primary" id="ezCheckClose">Close</button></div>');
+  document.getElementById('ezCheckClose').onclick = closeModal;
 }
 
 /* ---------- UIF Declaration ---------- */
@@ -3318,6 +3781,7 @@ function wireRouteEvents(){
     document.querySelectorAll('[data-ps]').forEach(function(el){ s[el.dataset.ps] = el.checked; });
     s.headerNote = document.getElementById('psHeaderNote').value.trim();
     s.footerNote = document.getElementById('psFooterNote').value.trim();
+    if(c.payslipSettings && c.payslipSettings._easyFile) s._easyFile = c.payslipSettings._easyFile;
     c.payslipSettings = s;
     var ok = await saveCompany(c);
     logActivity('company.payslip_layout', c.name);
@@ -3328,7 +3792,7 @@ function wireRouteEvents(){
   if(resetPsBtn) resetPsBtn.onclick = async function(){
     if(!confirm('Reset this company\'s payslip layout to the default?')) return;
     var c = currentCompany();
-    c.payslipSettings = Object.assign({}, PAYSLIP_DEFAULTS);
+    c.payslipSettings = Object.assign({}, PAYSLIP_DEFAULTS, (c.payslipSettings && c.payslipSettings._easyFile) ? {_easyFile:c.payslipSettings._easyFile} : {});
     await saveCompany(c);
     render();
   };
@@ -3382,6 +3846,22 @@ function wireRouteEvents(){
   if(e501PrintBtn) e501PrintBtn.onclick = function(){ window.print(); };
   var e501ExportBtn = document.getElementById('emp501ExportBtn');
   if(e501ExportBtn) e501ExportBtn.onclick = exportEmp501Csv;
+  var ezDl = document.getElementById('easyDownloadBtn');
+  if(ezDl) ezDl.onclick = function(){ downloadEasyFile(false); };
+  var ezForce = document.getElementById('easyForceBtn');
+  if(ezForce) ezForce.onclick = function(){ downloadEasyFile(true); };
+  var ezSet = document.getElementById('easySettingsBtn');
+  if(ezSet) ezSet.onclick = openEasySettingsModal;
+  var ezChk = document.getElementById('easyCheckBtn'), ezIn = document.getElementById('easyCheckInput');
+  if(ezChk && ezIn){
+    ezChk.onclick = function(){ ezIn.value = ''; ezIn.click(); };
+    ezIn.onchange = function(){
+      var f = ezIn.files && ezIn.files[0]; if(!f) return;
+      var rd = new FileReader();
+      rd.onload = function(){ easyShowFileCheck(f.name, String(rd.result||'')); };
+      rd.readAsText(f);
+    };
+  }
   var saveEmp501Btn = document.getElementById('saveEmp501Btn');
   if(saveEmp501Btn) saveEmp501Btn.onclick = async function(){
     var periodType = emp501Cache ? emp501Cache.periodType : 'interim';
