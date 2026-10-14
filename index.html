@@ -213,6 +213,26 @@ button{font-family:inherit;}
   .ps-doc{break-inside:avoid;}
 }
 
+
+/* ---------- Switch company modal ---------- */
+.sw-head{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);padding-bottom:12px;}
+.sw-x{cursor:pointer;color:var(--text-soft);font-size:15px;padding:2px 6px;}
+.sw-chips{display:flex;gap:8px;flex-wrap:wrap;}
+.sw-chip{border:1px solid var(--border);background:#fff;border-radius:8px;padding:8px 12px;font-size:13px;font-weight:600;cursor:pointer;color:var(--text);}
+.sw-chip.active{border-color:var(--gold);color:#9c7524;background:#fffaf0;}
+.sw-count{display:inline-block;margin-left:4px;background:#eef0f4;border-radius:20px;padding:0 7px;font-size:11px;}
+.sw-chip.active .sw-count{background:var(--gold);color:#241a05;}
+.sw-list{display:flex;flex-direction:column;gap:8px;}
+.sw-row{display:flex;align-items:center;gap:10px;border:1px solid var(--border);border-radius:8px;padding:12px 14px;cursor:pointer;background:#fff;}
+.sw-row:hover{background:#f7f8fa;}
+.sw-row.current{border-color:var(--gold);background:#faf7ef;}
+.sw-dot{width:7px;height:7px;border-radius:50%;background:#cfd3dc;flex-shrink:0;}
+.sw-row.current .sw-dot{background:var(--gold);}
+.sw-name{font-weight:700;font-size:13px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sw-actions{display:flex;gap:14px;}
+.sw-link{font-size:13px;color:var(--text-soft);cursor:pointer;}
+.sw-link:hover{color:var(--text);}
+
 /* ---------- Print / Save as PDF: documents only, no app controls ---------- */
 .print-value{display:none;}
 @page{ size:A4; margin:0; }
@@ -1635,6 +1655,179 @@ function renderCompanySwitcher(){
   }).join('');
   html += '<div class="company-menu-add" id="addCompanyBtn">+ Add company</div>';
   menu.innerHTML = html;
+}
+
+/* ---------- Switch company (admins): firms → companies, Move / Delete / Add / Rename ----------
+   A "firm" is a group of companies (e.g. Alcock Consulting, Mystique Accounting), as in Books & Ledgers.
+   The firm name is stored inside each company's settings JSON, so no database change is needed. */
+var DEFAULT_FIRM = 'Alcock Consulting';
+var SUGGESTED_FIRMS = ['Alcock Consulting','Mystique Accounting'];
+function firmOf(c){
+  var f = c && c.payslipSettings && c.payslipSettings._firm;
+  f = f ? String(f).replace(/\s+/g,' ').trim() : '';
+  return f || DEFAULT_FIRM;
+}
+function firmNames(){
+  var seen = {}, list = [];
+  state.companies.forEach(function(c){ var f = firmOf(c); if(!seen[f]){ seen[f] = true; list.push(f); } });
+  list.sort(function(a,b){ return a.localeCompare(b); });
+  return list;
+}
+async function setCompanyFirm(c, firm){
+  c.payslipSettings = Object.assign({}, c.payslipSettings||{}, {_firm:firm});
+  return await saveCompany(c);
+}
+function openSwitchCompanyModal(firm){
+  var cur = currentCompany();
+  var firms = firmNames();
+  if(!firm || firms.indexOf(firm)<0) firm = cur ? firmOf(cur) : firms[0];
+  var inFirm = state.companies.filter(function(c){ return firmOf(c)===firm; })
+    .sort(function(a,b){ return a.name.localeCompare(b.name); });
+  var chips = firms.map(function(f){
+    var n = state.companies.filter(function(c){ return firmOf(c)===f; }).length;
+    return '<button class="sw-chip'+(f===firm?' active':'')+'" data-sw-firm="'+esc(f)+'">'+esc(f)+' <span class="sw-count">'+n+'</span></button>';
+  }).join('');
+  var rows = inFirm.map(function(c){
+    var isCur = cur && c.id===cur.id;
+    return '<div class="sw-row'+(isCur?' current':'')+'" data-sw-open="'+c.id+'">'
+      +'<span class="sw-dot"></span><span class="sw-name">'+esc(c.name)+'</span>'
+      +'<span class="sw-actions"><span class="sw-link" data-sw-move="'+c.id+'">⇄ Move</span><span class="sw-link" data-sw-del="'+c.id+'">Delete</span></span></div>';
+  }).join('') || '<div class="empty-row">No companies in this firm yet.</div>';
+  openModal(''
+    +'<div class="sw-head"><h2 style="margin:0">Switch company</h2><span class="sw-x" id="swClose">✕</span></div>'
+    +'<div class="label-caps" style="margin:14px 0 8px">SELECT FIRM</div>'
+    +'<div class="sw-chips">'+chips+'</div>'
+    +'<div class="label-caps" style="margin:16px 0 8px">'+esc(firm.toUpperCase())+' — COMPANIES</div>'
+    +'<div class="sw-list">'+rows+'</div>'
+    +'<button class="btn" style="width:100%;margin-top:12px" id="swAdd">+ Add company to '+esc(firm)+'</button>'
+    +'<div style="text-align:center;margin-top:10px"><span class="sw-link" style="text-decoration:underline" id="swRename">Rename firms</span></div>'
+    +'<div class="modal-actions"><button class="btn" id="swCancel">Cancel</button></div>');
+  document.getElementById('swClose').onclick = closeModal;
+  document.getElementById('swCancel').onclick = closeModal;
+  document.querySelectorAll('[data-sw-firm]').forEach(function(el){
+    el.onclick = function(){ openSwitchCompanyModal(el.dataset.swFirm); };
+  });
+  document.querySelectorAll('[data-sw-open]').forEach(function(el){
+    el.onclick = function(){
+      state.currentCompanyId = el.dataset.swOpen;
+      saveLastCompany(state.currentCompanyId);
+      closeModal();
+      navigate(state.route);
+    };
+  });
+  document.querySelectorAll('[data-sw-move]').forEach(function(el){
+    el.onclick = function(e){ e.stopPropagation(); openMoveCompanyModal(el.dataset.swMove); };
+  });
+  document.querySelectorAll('[data-sw-del]').forEach(function(el){
+    el.onclick = function(e){ e.stopPropagation(); confirmDeleteCompany(el.dataset.swDel); };
+  });
+  document.getElementById('swAdd').onclick = function(){
+    var name = prompt('New company name (added to '+firm+'):');
+    if(!name || !name.trim()) return;
+    var nc = defaultCompany(name.trim());
+    nc.payslipSettings = {_firm:firm};
+    saveCompany(nc).then(function(ok){
+      if(ok===false){
+        state.companies = state.companies.filter(function(x){ return x.id!==nc.id; });
+        alert('The company could not be saved. Please try again.');
+        return;
+      }
+      state.currentCompanyId = nc.id;
+      saveLastCompany(nc.id);
+      logActivity('company.create', nc.name+' ('+firm+')');
+      closeModal();
+      navigate('company');
+    });
+  };
+  document.getElementById('swRename').onclick = function(){ openRenameFirmsModal(firm); };
+}
+function openMoveCompanyModal(companyId){
+  var c = state.companies.find(function(x){ return x.id===companyId; });
+  if(!c) return;
+  var from = firmOf(c);
+  var options = firmNames();
+  SUGGESTED_FIRMS.forEach(function(f){ if(options.indexOf(f)<0) options.push(f); });
+  openModal(''
+    +'<h2>Move company</h2>'
+    +'<div class="helptext">Move <b>'+esc(c.name)+'</b> from '+esc(from)+' to another firm. Type a new name to create a firm.</div>'
+    +'<div class="form-field"><label>Firm</label><input type="text" id="mvFirm" list="mvFirmList" value="'+esc(from)+'"></div>'
+    +'<datalist id="mvFirmList">'+options.map(function(f){ return '<option value="'+esc(f)+'">'; }).join('')+'</datalist>'
+    +'<div class="modal-actions"><button class="btn" id="mvCancel">Back</button><button class="btn btn-primary" id="mvSave">Move</button></div>');
+  document.getElementById('mvCancel').onclick = function(){ openSwitchCompanyModal(from); };
+  document.getElementById('mvSave').onclick = async function(){
+    var to = val('mvFirm').replace(/\s+/g,' ');
+    if(!to){ alert('Enter a firm name.'); return; }
+    if(to!==from){
+      var ok = await setCompanyFirm(c, to);
+      if(ok===false){ alert('The move could not be saved. Check the sync message at the bottom of the sidebar.'); }
+      else logActivity('company.move', c.name+': '+from+' → '+to);
+    }
+    openSwitchCompanyModal(to);
+  };
+}
+function openRenameFirmsModal(backFirm){
+  var firms = firmNames();
+  openModal(''
+    +'<h2>Rename firms</h2>'
+    +'<div class="helptext">Changing a name here renames the firm for every company in it.</div>'
+    +firms.map(function(f,i){ return '<div class="form-field" style="margin-bottom:10px"><label>'+esc(f)+'</label><input type="text" data-rn-old="'+esc(f)+'" id="rn'+i+'" value="'+esc(f)+'"></div>'; }).join('')
+    +'<div id="rnMsg" class="helptext"></div>'
+    +'<div class="modal-actions"><button class="btn" id="rnCancel">Back</button><button class="btn btn-primary" id="rnSave">Save names</button></div>');
+  document.getElementById('rnCancel').onclick = function(){ openSwitchCompanyModal(backFirm); };
+  document.getElementById('rnSave').onclick = async function(){
+    var inputs = Array.prototype.slice.call(document.querySelectorAll('[data-rn-old]'));
+    var pairs = inputs.map(function(el){ return {from:el.dataset.rnOld, to:el.value.replace(/\s+/g,' ').trim()}; });
+    var names = {};
+    for(var i=0;i<pairs.length;i++){
+      if(!pairs[i].to){ document.getElementById('rnMsg').textContent = 'Firm names can\'t be blank.'; return; }
+      if(names[pairs[i].to.toLowerCase()]){ document.getElementById('rnMsg').textContent = 'Two firms can\'t share the same name.'; return; }
+      names[pairs[i].to.toLowerCase()] = true;
+    }
+    var failed = false, nextFirm = backFirm;
+    for(var j=0;j<pairs.length;j++){
+      var p = pairs[j];
+      if(p.from===p.to) continue;
+      if(p.from===backFirm) nextFirm = p.to;
+      var members = state.companies.filter(function(c){ return firmOf(c)===p.from; });
+      for(var k=0;k<members.length;k++){
+        if(await setCompanyFirm(members[k], p.to) === false) failed = true;
+      }
+      logActivity('firm.rename', p.from+' → '+p.to);
+    }
+    if(failed) alert('Some companies could not be saved — check the sync message and try again.');
+    openSwitchCompanyModal(nextFirm);
+  };
+}
+function confirmDeleteCompany(companyId){
+  var c = state.companies.find(function(x){ return x.id===companyId; });
+  if(!c) return;
+  var firm = firmOf(c);
+  if(state.companies.length<=1){ alert('You can\'t delete the only company. Add another one first.'); return; }
+  var nEmp = state.employees.filter(function(e){ return e.companyId===c.id; }).length;
+  var nRuns = state.payruns.filter(function(r){ return r.companyId===c.id; }).length;
+  openModal(''
+    +'<h2>Delete company</h2>'
+    +'<div class="integrity-box integrity-warn" style="background:#fdeceb;color:#c0392b;">This permanently deletes <b>'+esc(c.name)+'</b> and cannot be undone.</div>'
+    +'<div class="helptext" style="margin-top:0">It has '+nEmp+' employee(s) and '+nRuns+' pay run(s), plus its leave, EMP201, EMP501 and UIF records. Download any CSV exports you need first.</div>'
+    +'<div class="form-field"><label>Type the company name to confirm</label><input type="text" id="delConfirm" autocomplete="off"></div>'
+    +'<div class="modal-actions"><button class="btn" id="delCancel">Keep company</button><button class="btn btn-danger" id="delGo">Delete permanently</button></div>');
+  document.getElementById('delCancel').onclick = function(){ openSwitchCompanyModal(firm); };
+  document.getElementById('delGo').onclick = async function(){
+    if(val('delConfirm')!==c.name.trim()){ alert('The name you typed doesn\'t match — nothing was deleted.'); return; }
+    var ok = await dbDelete('companies', c.id);
+    if(ok===false){ alert('The database refused the delete, so nothing was removed. Check your permissions and try again.'); return; }
+    removeLocal(state.companies, c.id);
+    ['employees','payruns','leave','emp201','emp501','uif'].forEach(function(k){
+      state[k] = state[k].filter(function(x){ return x.companyId!==c.id; });
+    });
+    logActivity('company.delete', c.name);
+    if(state.currentCompanyId===c.id){
+      state.currentCompanyId = state.companies[0].id;
+      saveLastCompany(state.currentCompanyId);
+    }
+    closeModal();
+    navigate(state.route);
+  };
 }
 
 /* ---------- Dashboard ---------- */
@@ -3793,7 +3986,7 @@ function wireRouteEvents(){
     document.querySelectorAll('[data-ps]').forEach(function(el){ s[el.dataset.ps] = el.checked; });
     s.headerNote = document.getElementById('psHeaderNote').value.trim();
     s.footerNote = document.getElementById('psFooterNote').value.trim();
-    if(c.payslipSettings && c.payslipSettings._easyFile) s._easyFile = c.payslipSettings._easyFile;
+    Object.keys(c.payslipSettings||{}).forEach(function(k){ if(k.charAt(0)==='_') s[k] = c.payslipSettings[k]; });
     c.payslipSettings = s;
     var ok = await saveCompany(c);
     logActivity('company.payslip_layout', c.name);
@@ -3804,7 +3997,8 @@ function wireRouteEvents(){
   if(resetPsBtn) resetPsBtn.onclick = async function(){
     if(!confirm('Reset this company\'s payslip layout to the default?')) return;
     var c = currentCompany();
-    c.payslipSettings = Object.assign({}, PAYSLIP_DEFAULTS, (c.payslipSettings && c.payslipSettings._easyFile) ? {_easyFile:c.payslipSettings._easyFile} : {});
+    var keep = {}; Object.keys(c.payslipSettings||{}).forEach(function(k){ if(k.charAt(0)==='_') keep[k] = c.payslipSettings[k]; });
+    c.payslipSettings = Object.assign({}, PAYSLIP_DEFAULTS, keep);
     await saveCompany(c);
     render();
   };
@@ -4707,7 +4901,11 @@ function wireStaticEvents(){
   });
   var pill = document.getElementById('companyPill');
   var menu = document.getElementById('companyMenu');
-  pill.addEventListener('click', function(e){ e.stopPropagation(); menu.classList.toggle('open'); });
+  pill.addEventListener('click', function(e){
+    e.stopPropagation();
+    if(isAdmin()){ menu.classList.remove('open'); openSwitchCompanyModal(); return; }
+    menu.classList.toggle('open');
+  });
   document.addEventListener('click', function(){ menu.classList.remove('open'); });
   menu.addEventListener('click', function(e){
     e.stopPropagation();
