@@ -2232,17 +2232,29 @@ function billingToRow(b){
   return {id:1, discount_pct:b.discountPct, vat_pct:b.vatPct, show_vat:!!b.showVat, base_fee:b.baseFee,
     band_mode:b.bandMode, bands:b.bands, updated_at:new Date().toISOString()};
 }
+/* SimplePay's published list price (excl. VAT), read off their pricing calculator for 1–8, 13 and 20 employees:
+   R70.00 base + R19.50 per employee for employees 1–5, R13.60 for 6–10, R11.00 from the 11th. Bands beyond 20
+   employees are assumed to continue at R11.00 — confirm against SimplePay's calculator for larger companies. */
+function simplePayRateCard(){
+  return {discountPct:20, vatPct:15, showVat:true, baseFee:70, bandMode:'graduated',
+    bands:[{upTo:5, rate:19.5},{upTo:10, rate:13.6},{upTo:null, rate:11}]};
+}
 async function loadBillingSettings(){
   var cu = state.currentUser;
   if(!cu || cu.role!=='admin') return;
   try{
+    var loaded = false;
     if(sb){
       var res = await sb.from('billing_settings').select('*').eq('id',1).maybeSingle();
-      if(!res.error && res.data){ state.billing = billingFromRow(res.data); return; }
+      if(!res.error && res.data){ state.billing = billingFromRow(res.data); loaded = true; }
     }
-    var raw = localStorage.getItem('reconi_billing_settings');
-    if(raw) state.billing = billingFromRow(JSON.parse(raw));
+    if(!loaded){
+      var raw = localStorage.getItem('reconi_billing_settings');
+      if(raw) state.billing = billingFromRow(JSON.parse(raw));
+    }
   }catch(e){ console.log('billing settings load', e); }
+  // Nothing priced yet → start from SimplePay's list price with a 20% discount (editable via Rate card).
+  if(!billingConfigured(state.billing)) state.billing = simplePayRateCard();
 }
 async function saveBillingSettings(){
   try{ localStorage.setItem('reconi_billing_settings', JSON.stringify(billingToRow(state.billing))); }catch(e){}
