@@ -1407,6 +1407,8 @@ function employeeToRow(e){
     var v = e[pair[0]];
     row[pair[1]] = (v===undefined) ? null : v;
   });
+  // Postgres rejects '' for date columns (e.g. no date of birth / no termination date) — store those as NULL.
+  ['dob','start_date','end_date'].forEach(function(k){ if(row[k]===''||(typeof row[k]==='string' && !row[k].trim())) row[k] = null; });
   if(e.address) row.address = e.address;   // optional column (payslip-layout.sql)
   return row;
 }
