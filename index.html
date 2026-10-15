@@ -317,6 +317,9 @@ tr:last-child td{border-bottom:none;}
 .pill-green{background:var(--green-bg);color:var(--green);}
 .pill-gray{background:#eef0f4;color:var(--text-soft);}
 .pill-gold{background:#faf1de;color:#9c7524;}
+.pill-red{background:#fdeceb;color:var(--red);}
+.bill-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:#faf1de;color:#6f5217;border:1px solid #ecd9a8;border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:13px;}
+.bill-banner.bill-red{background:#fdeceb;color:#8f2a20;border-color:#f3cac5;}
 
 .integrity-box{background:var(--green-bg);color:var(--green);border-radius:8px;padding:8px 12px;font-weight:700;font-size:12.5px;display:inline-flex;align-items:center;gap:6px;margin-bottom:12px;}
 .integrity-warn{background:#fdf3e3;color:#9c6a15;}
@@ -465,6 +468,10 @@ tr:last-child td{border-bottom:none;}
       <div class="nav-item" data-route="activity" data-admin-only="1">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/></svg>
         Activity Log
+      </div>
+      <div class="nav-item" data-route="subscription" data-client-only="1" style="display:none">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M7 15h4"/></svg>
+        My subscription
       </div>
       <div class="nav-item" data-route="billing" data-admin-only="1">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M7 15h4"/></svg>
@@ -731,6 +738,12 @@ var state = {
   billingMonth: '',
   accounts: [],
   accountsError: '',
+  billingInfo: null,
+  billingNotice: '',
+  myPayments: [],
+  clientRate: null,
+  subs: null,
+  subsError: '',
   currentUser: null,
   currentCompanyId: null,
   route: 'dashboard',
@@ -1078,6 +1091,7 @@ async function handlePostAuth(){
   if(!profile.active){ renderPendingApproval(profile.email); showLogin(); return; }
   var loaded = await loadPayrollData();
   if(loaded===false && profile.role==='client'){ renderClientLoadError(); showLogin(); return; }
+  await loadMyBilling();
   if(profile.role==='client' && !state.companies.length){ renderClientAddCompany(); showLogin(); return; }
   finishLogin();
 }
@@ -1095,7 +1109,9 @@ function finishLogin(){
   touchActivity();
   startSessionWatch();
   showApp();
+  var returned = handleBillingReturn();
   bootApp();
+  if(isClient()){ Promise.all([loadClientRate(), loadMyPayments()]).then(function(){ if(state.route==='subscription') render(); }); if(returned) navigate('subscription'); }
   logActivity('login', 'Signed in');
 }
 function renderClientAddCompany(errMsg){
@@ -1150,6 +1166,7 @@ function signOut(){
   state.emp201 = []; state.emp501 = []; state.uif = []; state.auditLog = [];
   state.users = []; state.accounts = []; state.currentCompanyId = null;
   state.billing = {discountPct:15, vatPct:15, showVat:true, baseFee:0, bandMode:'volume', bands:[]};
+  state.billingInfo = null; state.billingNotice = ''; state.myPayments = []; state.clientRate = null; state.subs = null; state.subsError = '';
   state.route = 'dashboard'; state.routeParam = null;
   if(window.__acctTimer){ clearInterval(window.__acctTimer); window.__acctTimer = null; }
   dbReady = false;
@@ -1169,6 +1186,9 @@ function bootApp(){
   if(roleEl) roleEl.textContent = u ? u.role : '';
   document.querySelectorAll('[data-admin-only]').forEach(function(el){
     el.style.display = isAdmin() ? '' : 'none';
+  });
+  document.querySelectorAll('[data-client-only]').forEach(function(el){
+    el.style.display = isClient() ? '' : 'none';
   });
   if(!booted){
     booted = true;
@@ -1498,6 +1518,7 @@ function reportSaveError(collection, e){
   alert('This change was NOT saved to the database ('+collection+').\n\n'+msg+'\n\nIf this says "row-level security", the latest SQL migrations have not been run in Supabase yet, or this login has no access to the company.');
 }
 async function dbSet(collection, doc){
+  if(isReadOnly()){ reportReadOnly(); return false; }
   if(sb && dbReady){
     try{
       setSync('Saving…');
@@ -1523,6 +1544,7 @@ async function dbSet(collection, doc){
   }
 }
 async function dbDelete(collection, id){
+  if(isReadOnly()){ reportReadOnly(); return false; }
   if(sb && dbReady){
     try{
       var table = collection==='payruns' ? 'pay_runs' : collection;
@@ -1612,6 +1634,8 @@ function navigate(route, param){
   closeSidebarMobile();
   render();
   if(route==='users' && isAdmin()) loadAccounts().then(function(){ if(state.route==='users') render(); });
+  if(route==='billing' && isAdmin()) loadSubs().then(function(){ if(state.route==='billing') render(); });
+  if(route==='subscription' && isClient()) Promise.all([loadMyBilling(), loadMyPayments(), loadClientRate()]).then(function(){ if(state.route==='subscription') render(); });
 }
 function icon(check){
   return check
@@ -1633,12 +1657,13 @@ function render(){
     activity: renderActivity,
     backup: renderBackup,
     billing: renderBilling,
+    subscription: renderSubscription,
     emp201: renderEmp201,
     emp501: renderEmp501,
     uif: renderUif,
     reports: renderReports
   }[state.route] || renderDashboard;
-  root.innerHTML = fn();
+  root.innerHTML = (isClient() && state.route!=='subscription' ? billingBannerHtml() : '') + fn();
   renderCompanySwitcher();
   wireRouteEvents();
 }
@@ -1659,33 +1684,42 @@ function renderCompanySwitcher(){
 
 /* ---------- Switch company (admins): firms → companies, Move / Delete / Add / Rename ----------
    A "firm" is a group of companies (e.g. Alcock Consulting, Mystique Accounting), as in Books & Ledgers.
+   Same model as Books & Ledgers: two practices plus "Unassigned" for companies not yet grouped.
    The firm name is stored inside each company's settings JSON, so no database change is needed. */
-var DEFAULT_FIRM = 'Alcock Consulting';
 var SUGGESTED_FIRMS = ['Alcock Consulting','Mystique Accounting'];
+var UNASSIGNED = '__unassigned__';
 function firmOf(c){
   var f = c && c.payslipSettings && c.payslipSettings._firm;
-  f = f ? String(f).replace(/\s+/g,' ').trim() : '';
-  return f || DEFAULT_FIRM;
+  return f ? String(f).replace(/\s+/g,' ').trim() : '';   // '' = unassigned
 }
+function firmLabel(f){ return (!f || f===UNASSIGNED) ? 'Unassigned' : f; }
+function firmKey(c){ return firmOf(c) || UNASSIGNED; }
 function firmNames(){
   var seen = {}, list = [];
-  state.companies.forEach(function(c){ var f = firmOf(c); if(!seen[f]){ seen[f] = true; list.push(f); } });
+  state.companies.forEach(function(c){ var f = firmOf(c); if(f && !seen[f]){ seen[f] = true; list.push(f); } });
+  // Always offer two practices (like Books & Ledgers): fill any gap with the usual names.
+  SUGGESTED_FIRMS.forEach(function(f){ if(list.length<2 && !seen[f]){ seen[f] = true; list.push(f); } });
   list.sort(function(a,b){ return a.localeCompare(b); });
   return list;
 }
 async function setCompanyFirm(c, firm){
-  c.payslipSettings = Object.assign({}, c.payslipSettings||{}, {_firm:firm});
+  var s = Object.assign({}, c.payslipSettings||{});
+  if(firm && firm!==UNASSIGNED) s._firm = firm; else delete s._firm;
+  c.payslipSettings = s;
   return await saveCompany(c);
 }
 function openSwitchCompanyModal(firm){
   var cur = currentCompany();
   var firms = firmNames();
-  if(!firm || firms.indexOf(firm)<0) firm = cur ? firmOf(cur) : firms[0];
-  var inFirm = state.companies.filter(function(c){ return firmOf(c)===firm; })
+  var unassignedN = state.companies.filter(function(c){ return !firmOf(c); }).length;
+  var tabs = firms.slice(); if(unassignedN) tabs.push(UNASSIGNED);
+  if(!firm || tabs.indexOf(firm)<0) firm = cur ? firmKey(cur) : tabs[0];
+  if(tabs.indexOf(firm)<0) firm = tabs[0];
+  var inFirm = state.companies.filter(function(c){ return firmKey(c)===firm; })
     .sort(function(a,b){ return a.name.localeCompare(b.name); });
-  var chips = firms.map(function(f){
-    var n = state.companies.filter(function(c){ return firmOf(c)===f; }).length;
-    return '<button class="sw-chip'+(f===firm?' active':'')+'" data-sw-firm="'+esc(f)+'">'+esc(f)+' <span class="sw-count">'+n+'</span></button>';
+  var chips = tabs.map(function(f){
+    var n = state.companies.filter(function(c){ return firmKey(c)===f; }).length;
+    return '<button class="sw-chip'+(f===firm?' active':'')+'" data-sw-firm="'+esc(f)+'">'+esc(firmLabel(f))+' <span class="sw-count">'+n+'</span></button>';
   }).join('');
   var rows = inFirm.map(function(c){
     var isCur = cur && c.id===cur.id;
@@ -1697,9 +1731,9 @@ function openSwitchCompanyModal(firm){
     +'<div class="sw-head"><h2 style="margin:0">Switch company</h2><span class="sw-x" id="swClose">✕</span></div>'
     +'<div class="label-caps" style="margin:14px 0 8px">SELECT FIRM</div>'
     +'<div class="sw-chips">'+chips+'</div>'
-    +'<div class="label-caps" style="margin:16px 0 8px">'+esc(firm.toUpperCase())+' — COMPANIES</div>'
+    +'<div class="label-caps" style="margin:16px 0 8px">'+esc(firmLabel(firm).toUpperCase())+' — COMPANIES</div>'
     +'<div class="sw-list">'+rows+'</div>'
-    +'<button class="btn" style="width:100%;margin-top:12px" id="swAdd">+ Add company to '+esc(firm)+'</button>'
+    +'<button class="btn" style="width:100%;margin-top:12px" id="swAdd">+ Add company to '+esc(firmLabel(firm))+'</button>'
     +'<div style="text-align:center;margin-top:10px"><span class="sw-link" style="text-decoration:underline" id="swRename">Rename firms</span></div>'
     +'<div class="modal-actions"><button class="btn" id="swCancel">Cancel</button></div>');
   document.getElementById('swClose').onclick = closeModal;
@@ -1722,10 +1756,10 @@ function openSwitchCompanyModal(firm){
     el.onclick = function(e){ e.stopPropagation(); confirmDeleteCompany(el.dataset.swDel); };
   });
   document.getElementById('swAdd').onclick = function(){
-    var name = prompt('New company name (added to '+firm+'):');
+    var name = prompt('New company name (added to '+firmLabel(firm)+'):');
     if(!name || !name.trim()) return;
     var nc = defaultCompany(name.trim());
-    nc.payslipSettings = {_firm:firm};
+    nc.payslipSettings = (firm && firm!==UNASSIGNED) ? {_firm:firm} : null;
     saveCompany(nc).then(function(ok){
       if(ok===false){
         state.companies = state.companies.filter(function(x){ return x.id!==nc.id; });
@@ -1734,7 +1768,7 @@ function openSwitchCompanyModal(firm){
       }
       state.currentCompanyId = nc.id;
       saveLastCompany(nc.id);
-      logActivity('company.create', nc.name+' ('+firm+')');
+      logActivity('company.create', nc.name+' ('+firmLabel(firm)+')');
       closeModal();
       navigate('company');
     });
@@ -1744,29 +1778,34 @@ function openSwitchCompanyModal(firm){
 function openMoveCompanyModal(companyId){
   var c = state.companies.find(function(x){ return x.id===companyId; });
   if(!c) return;
-  var from = firmOf(c);
+  var from = firmKey(c);
   var options = firmNames();
-  SUGGESTED_FIRMS.forEach(function(f){ if(options.indexOf(f)<0) options.push(f); });
   openModal(''
-    +'<h2>Move company</h2>'
-    +'<div class="helptext">Move <b>'+esc(c.name)+'</b> from '+esc(from)+' to another firm. Type a new name to create a firm.</div>'
-    +'<div class="form-field"><label>Firm</label><input type="text" id="mvFirm" list="mvFirmList" value="'+esc(from)+'"></div>'
-    +'<datalist id="mvFirmList">'+options.map(function(f){ return '<option value="'+esc(f)+'">'; }).join('')+'</datalist>'
-    +'<div class="modal-actions"><button class="btn" id="mvCancel">Back</button><button class="btn btn-primary" id="mvSave">Move</button></div>');
-  document.getElementById('mvCancel').onclick = function(){ openSwitchCompanyModal(from); };
-  document.getElementById('mvSave').onclick = async function(){
-    var to = val('mvFirm').replace(/\s+/g,' ');
-    if(!to){ alert('Enter a firm name.'); return; }
+    +'<h2>Group under a firm</h2>'
+    +'<div class="helptext">Group <b>'+esc(c.name)+'</b> under:</div>'
+    +options.map(function(f){ return '<button class="btn'+(f===from?' btn-primary':'')+'" style="width:100%;text-align:left;margin-bottom:8px" data-mv-to="'+esc(f)+'">'+esc(f)+'</button>'; }).join('')
+    +'<button class="btn" style="width:100%;text-align:left;margin-bottom:8px;color:var(--text-soft)" data-mv-to="'+UNASSIGNED+'">Unassigned</button>'
+    +'<div class="form-field" style="margin-top:6px"><label>Or a new firm name</label><div style="display:flex;gap:8px"><input type="text" id="mvNew" style="flex:1" placeholder="e.g. Another Practice"><button class="btn btn-primary" id="mvNewGo">Move</button></div></div>'
+    +'<div class="modal-actions"><button class="btn" id="mvCancel">Back</button></div>');
+  var done = async function(to){
     if(to!==from){
       var ok = await setCompanyFirm(c, to);
       if(ok===false){ alert('The move could not be saved. Check the sync message at the bottom of the sidebar.'); }
-      else logActivity('company.move', c.name+': '+from+' → '+to);
+      else logActivity('company.move', c.name+': '+firmLabel(from)+' → '+firmLabel(to));
     }
     openSwitchCompanyModal(to);
   };
+  document.getElementById('mvCancel').onclick = function(){ openSwitchCompanyModal(from); };
+  document.querySelectorAll('[data-mv-to]').forEach(function(el){ el.onclick = function(){ done(el.dataset.mvTo); }; });
+  document.getElementById('mvNewGo').onclick = function(){
+    var n = val('mvNew').replace(/\s+/g,' ');
+    if(!n){ alert('Enter a firm name.'); return; }
+    done(n);
+  };
 }
 function openRenameFirmsModal(backFirm){
-  var firms = firmNames();
+  var firms = firmNames().filter(function(f){ return state.companies.some(function(c){ return firmOf(c)===f; }); });
+  if(!firms.length){ alert('Move at least one company into a firm first — a firm\'s name is stored with its companies.'); return; }
   openModal(''
     +'<h2>Rename firms</h2>'
     +'<div class="helptext">Changing a name here renames the firm for every company in it.</div>'
@@ -1801,7 +1840,7 @@ function openRenameFirmsModal(backFirm){
 function confirmDeleteCompany(companyId){
   var c = state.companies.find(function(x){ return x.id===companyId; });
   if(!c) return;
-  var firm = firmOf(c);
+  var firm = firmKey(c);
   if(state.companies.length<=1){ alert('You can\'t delete the only company. Add another one first.'); return; }
   var nEmp = state.employees.filter(function(e){ return e.companyId===c.id; }).length;
   var nRuns = state.payruns.filter(function(r){ return r.companyId===c.id; }).length;
@@ -2276,7 +2315,7 @@ async function loadAccounts(){
     state.accountsError = '';
   }catch(e){
     console.log('load accounts', e);
-    state.accountsError = 'Could not load sign-ups. Run account-approvals.sql in Supabase, then refresh.';
+    state.accountsError = 'Could not load the accounts list ('+((e && (e.message||e.details)) || 'unknown error')+'). In Supabase open SQL Editor, paste and run account-approvals.sql, then press Retry.';
   }
   updateApprovalsBadge();
 }
@@ -2330,7 +2369,7 @@ async function openClientCompaniesModal(uid){
 }
 function renderApprovalsCard(){
   if(!sb) return '';
-  if(state.accountsError) return '<div class="card" style="margin-bottom:14px;"><div class="card-title">Sign-up requests</div><div class="helptext" style="margin-top:6px;">'+esc(state.accountsError)+'</div></div>';
+  if(state.accountsError) return '<div class="card" style="margin-bottom:14px;"><div class="card-title">Accounts &amp; sign-up requests</div><div class="helptext" style="margin-top:6px;">'+esc(state.accountsError)+'</div><button class="btn btn-sm" id="retryAccountsBtn" style="margin-top:8px;">Retry</button></div>';
   var fmt = function(d){ try{ return new Date(d).toLocaleDateString('en-ZA'); }catch(e){ return ''; } };
   var pend = pendingAccounts();
   var pRows = pend.map(function(a){
@@ -2338,6 +2377,7 @@ function renderApprovalsCard(){
       +'<td>'+esc(a.company||'—')+'</td><td>'+esc(fmt(a.createdAt))+'</td>'
       +'<td style="white-space:nowrap;"><button class="btn btn-sm btn-gold" data-approve-account="'+esc(a.id)+'" data-role="client">Approve as client</button> '
       +'<button class="btn btn-sm" data-approve-account="'+esc(a.id)+'" data-role="staff">As staff</button> '
+      +'<button class="btn btn-sm" data-approve-account="'+esc(a.id)+'" data-role="admin">As admin</button> '
       +'<button class="btn btn-sm btn-danger" data-decline-account="'+esc(a.id)+'">Decline</button></td></tr>';
   }).join('');
   var act = state.accounts.filter(function(a){ return a.active; });
@@ -2347,6 +2387,7 @@ function renderApprovalsCard(){
       +'<td>'+esc(capitalize(a.role))+'</td><td>'+esc(a.company||'—')+'</td><td>'+esc(fmt(a.createdAt))+'</td>'
       +'<td style="white-space:nowrap;">'+(isMe?'<span class="stat-caption">(you)</span>':
         (a.role==='client'?'<span class="link-btn" data-client-companies="'+esc(a.id)+'">Companies</span> &nbsp; ':'')
+        +(a.role!=='admin'?'<span class="link-btn" data-make-admin="'+esc(a.id)+'">Make admin</span> &nbsp; ':'')
         +'<span class="link-btn" data-deactivate-account="'+esc(a.id)+'">Deactivate</span>')+'</td></tr>';
   }).join('');
   return ''
@@ -2375,7 +2416,9 @@ function renderUsers(){
   +'<div class="topbar"><div><h1>Users &amp; Access</h1><div class="subtitle">People who can sign in to this Reconi Payroll workspace</div></div>'
     +'<div class="topbar-right"><button class="btn btn-gold" id="addUserBtn">+ Add user</button></div></div>'
   +renderApprovalsCard()
-  +'<div class="card"><div class="table-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th></th></tr></thead><tbody>'
+  +'<div class="card"><div class="card-title" style="margin-bottom:4px;">'+(sb?'Older local logins (this browser only)':'Users')+'</div>'
+  +(sb?'<div class="helptext" style="margin-top:0;">These are not the Supabase accounts. Everyone who signs in through Supabase — both admins and all clients — is listed under Approved accounts above.</div>':'')
+  +'<div class="table-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th></th></tr></thead><tbody>'
   +(rows || '<tr><td colspan="4" class="empty-row">No users yet.</td></tr>')
   +'</tbody></table></div></div>'
   +'<div class="card" style="max-width:640px;">'
@@ -2548,6 +2591,7 @@ function renderBilling(){
     +'<div class="topbar-right"><input type="month" id="billMonth" value="'+esc(month)+'" style="padding:7px 9px;border:1px solid var(--border);border-radius:8px;">'
     +'<button class="btn" id="billRateBtn">Rate card</button>'
     +'<button class="btn btn-primary" id="billCsvBtn">Export CSV</button></div></div>'
+  +renderSubsCard()
   +(configured ? '' : '<div class="pending-box" style="margin-bottom:14px;">The rate card is empty, so every bill shows R 0.00. Open <b>Rate card</b> and enter the per-employee price bands (the SimplePay price list). The '+esc(String(s.discountPct))+'% discount'+(s.showVat?' and '+esc(String(s.vatPct))+'% VAT are':' is')+' applied automatically.</div>')
   +'<div class="stat-grid">'
     +'<div class="card"><div class="stat-caption">Companies</div><div class="stat-value">'+rows.length+'</div></div>'
@@ -2621,6 +2665,245 @@ function exportBillingCsv(){
       downloads.save({filename:filename, data: csv}).catch(function(){ fallbackCsv(csv); });
     } else { fallbackCsv(csv); }
   }).catch(function(){ fallbackCsv(csv); });
+}
+
+/* ---------- PayFast subscription: client "My subscription" page, banner, read-only mode ---------- */
+function isReadOnly(){ return !!(isClient() && state.billingInfo && state.billingInfo.access==='readonly'); }
+async function loadMyBilling(){
+  if(!sb || !state.currentUser || isAdmin() || !isClient()){ state.billingInfo = null; return; }
+  try{
+    var res = await sb.rpc('my_billing');
+    if(res.error) throw res.error;
+    var r = (res.data||[])[0];
+    state.billingInfo = r ? {
+      status:r.subscription_status, trialEndsAt:r.trial_ends_at, daysLeft:r.days_left, access:r.access,
+      amount:r.billing_amount, billedEmployees:r.billing_employees, nextBilling:r.next_billing_date,
+      lastPayment:r.last_payment_at, cancelRequested:!!r.cancel_requested,
+      activeEmployees:Number(r.active_employees)||0, hasCard:!!r.has_card
+    } : null;
+  }catch(e){ console.log('my_billing', e); state.billingInfo = null; }
+}
+async function loadMyPayments(){
+  state.myPayments = [];
+  if(!sb || !isClient()) return;
+  try{
+    var res = await sb.from('payments').select('created_at,amount_gross,payment_status,item_name').order('created_at',{ascending:false}).limit(24);
+    if(!res.error) state.myPayments = (res.data||[]).filter(function(p){ return p.payment_status && p.payment_status!=='PENDING'; });
+  }catch(e){ console.log('payments', e); }
+}
+async function loadClientRate(){
+  state.clientRate = null;
+  if(sb && isClient()){
+    try{
+      var res = await sb.from('billing_settings').select('*').eq('id',1).maybeSingle();
+      if(!res.error && res.data){ var c = billingFromRow(res.data); if(billingConfigured(c)) state.clientRate = c; }
+    }catch(e){}
+  }
+  if(!state.clientRate) state.clientRate = simplePayRateCard();
+}
+var lastReadOnlyAlert = 0;
+function reportReadOnly(){
+  var now = Date.now();
+  if(now - lastReadOnlyAlert < 4000) return;
+  lastReadOnlyAlert = now;
+  alert('Your account is read-only right now, so this change was NOT saved.\n\nOpen "My subscription" and subscribe to continue editing. Your data is safe and you can still view and download everything.');
+  loadPayrollData().then(function(){ render(); }).catch(function(){});
+}
+function bDate(iso){ return iso ? fmtDateShort(String(iso).slice(0,10)) : '—'; }
+function subPill(st){
+  var m = {trialing:['pill-gold','Free trial'], active:['pill-green','Active'], past_due:['pill-red','Payment failed'],
+           canceled:['pill-gray','Cancelled'], exempt:['pill-gray','Not billed']};
+  var x = m[st] || ['pill-gray', st||'—'];
+  return '<span class="pill-status '+x[0]+'">'+esc(x[1])+'</span>';
+}
+function billingBannerHtml(){
+  var b = state.billingInfo;
+  if(!isClient() || !b || b.status==='exempt') return '';
+  var link = ' <button class="btn btn-sm btn-gold" data-route-link="subscription">My subscription</button>';
+  if(b.access==='readonly'){
+    var why = b.status==='past_due' ? 'Your last payment did not go through.' : (b.status==='canceled' ? 'Your subscription has ended.' : 'Your free trial has ended.');
+    return '<div class="bill-banner bill-red"><span><b>Read-only mode.</b> '+why+' You can view and download everything, but not make changes.</span>'+link+'</div>';
+  }
+  if(b.status==='trialing'){
+    var d = Number(b.daysLeft)||0;
+    return '<div class="bill-banner"><span><b>Free trial:</b> '+d+' day'+(d===1?'':'s')+' left (ends '+esc(bDate(b.trialEndsAt))+').</span>'+link+'</div>';
+  }
+  if(b.status==='active' && b.cancelRequested){
+    return '<div class="bill-banner"><span>Your subscription is set to cancel; you keep full access until '+esc(bDate(b.nextBilling))+'.</span>'+link+'</div>';
+  }
+  return '';
+}
+function renderSubscription(){
+  var title = '<div class="topbar"><div><h1>My subscription</h1><div class="subtitle">Your RECONI Payroll plan and payments</div></div></div>';
+  if(!isClient()){
+    return title+'<div class="card">Admin and staff accounts are not billed. Client subscriptions are managed under <b>Billing</b>.</div>';
+  }
+  var b = state.billingInfo;
+  if(!b){
+    return title+'<div class="card">We could not load your subscription details yet. If this keeps happening, contact Alcock Consulting.</div>';
+  }
+  var rate = state.clientRate || simplePayRateCard();
+  var n = b.activeEmployees;
+  var bill = computeBill(n, rate);
+  var notice = state.billingNotice ? '<div class="pending-box" style="margin-bottom:14px;">'+esc(state.billingNotice)+'</div>' : '';
+  var statusLine;
+  if(b.status==='trialing') statusLine = (b.access==='full' ? '<b>'+(Number(b.daysLeft)||0)+' day'+((Number(b.daysLeft)||0)===1?'':'s')+'</b> left in your free trial (ends '+esc(bDate(b.trialEndsAt))+').' : 'Your free trial ended on '+esc(bDate(b.trialEndsAt))+'.');
+  else if(b.status==='active') statusLine = 'Next payment on <b>'+esc(bDate(b.nextBilling))+'</b>'+(b.amount?' (last charge '+esc(fmtZAR(b.amount))+')':'')+'.';
+  else if(b.status==='past_due') statusLine = 'Your last payment failed. Subscribe again with a working card to restore access.';
+  else if(b.status==='canceled') statusLine = 'Your subscription was cancelled.';
+  else statusLine = '';
+  var canSub = b.status!=='active';
+  var actions = '';
+  if(canSub){
+    actions = n<1
+      ? '<div class="helptext">Add at least one active employee to one of your companies before subscribing.</div>'
+      : '<button class="btn btn-gold" id="subStartBtn">Subscribe — '+esc(fmtZAR(bill.total))+' / month</button>'
+        +'<div class="helptext" style="margin-top:8px;">You will be taken to PayFast to pay securely. Your first payment is taken immediately'+(b.status==='trialing'&&b.access==='full'?' (any remaining free-trial days are not carried over)':'')+', then once a month. Card details are held by PayFast, never by RECONI.</div>';
+  } else if(b.cancelRequested){
+    actions = '<button class="btn" id="subResumeBtn">Keep my subscription</button><div class="helptext" style="margin-top:8px;">Cancellation is scheduled. You keep full access until '+esc(bDate(b.nextBilling))+' and will not be charged again.</div>';
+  } else {
+    actions = '<button class="btn" id="subCancelBtn">Cancel subscription</button>';
+  }
+  var pay = (state.myPayments||[]).map(function(p){
+    var ok = p.payment_status==='COMPLETE';
+    return '<tr><td>'+esc(bDate(p.created_at))+'</td><td>'+esc(p.item_name||'Subscription')+'</td><td class="num">'+esc(fmtZAR(p.amount_gross||0))+'</td><td>'
+      +(ok?'<span class="pill-status pill-green">Paid</span>':'<span class="pill-status pill-red">'+esc(p.payment_status==='FAILED'?'Failed':'Not completed')+'</span>')+'</td></tr>';
+  }).join('');
+  return title + notice
+  +'<div class="card" style="margin-bottom:14px;"><div class="card-header"><div class="card-title">Status</div>'+subPill(b.status)+'</div>'
+    +'<div style="font-size:14px;line-height:1.7;">'+statusLine+'</div><div style="margin-top:12px;">'+actions+'</div></div>'
+  +'<div class="card" style="margin-bottom:14px;"><div class="card-header"><div class="card-title">What you pay</div></div>'
+    +'<div class="table-wrap"><table><tbody>'
+      +'<tr><td>Active employees (all your companies)</td><td class="num"><b>'+n+'</b></td></tr>'
+      +'<tr><td>Price'+(rate.showVat?' (excl. VAT)':'')+'</td><td class="num">'+esc(fmtZAR(bill.net))+'</td></tr>'
+      +(rate.showVat?'<tr><td>VAT '+esc(String(rate.vatPct))+'%</td><td class="num">'+esc(fmtZAR(bill.vat))+'</td></tr>':'')
+      +'<tr><td><b>Estimated monthly total</b></td><td class="num"><b>'+esc(fmtZAR(bill.total))+'</b></td></tr>'
+    +'</tbody></table></div>'
+    +'<div class="helptext" style="margin-top:8px;">You are billed for active employees across all of your companies, so the amount follows your headcount each month. The exact amount is confirmed at checkout.</div></div>'
+  +'<div class="card"><div class="card-header"><div class="card-title">Payment history</div></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Item</th><th class="num">Amount</th><th>Result</th></tr></thead><tbody>'
+    +(pay || '<tr><td colspan="4" class="empty-row">No payments yet.</td></tr>')+'</tbody></table></div></div>';
+}
+async function startCheckout(btn){
+  var label = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Preparing secure checkout…';
+  try{
+    var res = await sb.functions.invoke('payfast-checkout', {body:{}});
+    if(res.error){
+      var msg = res.error.message || 'Could not start checkout.';
+      try{ var j = await res.error.context.json(); if(j && j.error) msg = j.error; }catch(e){}
+      throw new Error(msg);
+    }
+    var out = res.data;
+    if(!out || !out.processUrl || !out.params) throw new Error('Checkout did not return a payment form.');
+    var f = document.createElement('form');
+    f.method = 'POST'; f.action = out.processUrl; f.style.display = 'none';
+    Object.keys(out.params).forEach(function(k){
+      var i = document.createElement('input'); i.type = 'hidden'; i.name = k; i.value = out.params[k]; f.appendChild(i);
+    });
+    document.body.appendChild(f);
+    f.submit();
+  }catch(e){
+    btn.disabled = false; btn.textContent = label;
+    alert('Could not start checkout.\n\n'+(e && e.message || e));
+  }
+}
+async function setCancelRequested(flag){
+  var res = await sb.rpc('set_cancel_requested', {flag:flag});
+  if(res.error){ alert('That did not work: '+res.error.message+'\n\nAsk Alcock Consulting to run the latest billing SQL (payfast-3-readonly-and-cancel.sql).'); return false; }
+  await loadMyBilling();
+  return true;
+}
+/* Back from PayFast: ?billing=success|cancelled. Poll a few times while the webhook confirms the payment. */
+function handleBillingReturn(){
+  var q = ''; try{ q = new URLSearchParams(location.search).get('billing') || ''; }catch(e){}
+  if(!q || !isClient()) return false;
+  try{ history.replaceState(null, '', location.pathname); }catch(e){}
+  state.route = 'subscription';
+  if(q==='success'){
+    state.billingNotice = 'Thank you! We are confirming your payment with PayFast. This usually takes a few seconds and this page will update by itself.';
+    var tries = 0;
+    var t = setInterval(async function(){
+      tries++;
+      await loadMyBilling();
+      if(state.billingInfo && state.billingInfo.status==='active'){
+        clearInterval(t); state.billingNotice = 'Payment received. Your subscription is active.';
+        await loadMyPayments(); if(state.route==='subscription') render(); return;
+      }
+      if(tries>=10){ clearInterval(t); state.billingNotice = 'We have not received PayFast\'s confirmation yet. If your account does not show Active within a few minutes, contact Alcock Consulting.'; }
+      if(state.route==='subscription') render();
+    }, 4000);
+  } else {
+    state.billingNotice = 'Checkout was cancelled. You have not been charged.';
+  }
+  return true;
+}
+
+/* ---------- Admin: subscriptions table ---------- */
+async function loadSubs(){
+  if(!sb || !isAdmin()){ state.subs = []; return; }
+  try{
+    var res = await sb.rpc('admin_list_billing');
+    if(res.error) throw res.error;
+    state.subs = res.data || [];
+    state.subsError = '';
+  }catch(e){
+    console.log('admin_list_billing', e);
+    state.subs = state.subs || [];
+    state.subsError = 'Could not load subscriptions ('+((e && (e.message||e.details)) || 'unknown error')+'). Run payfast-1-database.sql in Supabase, then reopen this page.';
+  }
+}
+function renderSubsCard(){
+  var subs = state.subs || [];
+  if(state.subsError) return '<div class="pending-box" style="margin-bottom:14px;">'+esc(state.subsError)+'</div>';
+  var clients = subs.filter(function(s){ return s.role==='client'; });
+  var c = {trialing:0, active:0, past_due:0, canceled:0};
+  var mrr = 0;
+  clients.forEach(function(s){ if(c[s.subscription_status]!=null) c[s.subscription_status]++; if(s.subscription_status==='active' && !s.cancel_requested) mrr += Number(s.billing_amount)||0; });
+  var rows = subs.map(function(s){
+    var isClientRow = s.role==='client';
+    var btns = '';
+    if(isClientRow){
+      btns = '<button class="btn btn-sm" data-sub-action="extend_trial" data-uid="'+esc(s.id)+'">+14 days</button> '
+        +'<button class="btn btn-sm" data-sub-action="mark_active" data-uid="'+esc(s.id)+'">Mark paid</button> '
+        +'<button class="btn btn-sm" data-sub-action="exempt" data-uid="'+esc(s.id)+'">Don\'t bill</button> '
+        +'<button class="btn btn-sm" data-sub-admin="'+esc(s.id)+'" data-email="'+esc(s.email)+'">Make admin</button>';
+      if(s.subscription_status==='exempt' || s.subscription_status==='canceled' || s.subscription_status==='past_due')
+        btns = '<button class="btn btn-sm" data-sub-action="restart_trial" data-uid="'+esc(s.id)+'">Restart trial</button> '+btns;
+    } else { btns = '<span class="helptext">'+esc(s.role)+' — never billed</span>'; }
+    return '<tr><td><b>'+esc(s.name||s.email)+'</b><div style="font-size:11.5px;color:var(--text-faint);line-height:1.3;">'+esc(s.email)+'</div></td><td>'+esc(s.role)+'</td><td>'+subPill(s.subscription_status)+(s.cancel_requested?' <span class="helptext">cancels</span>':'')+'</td>'
+      +'<td>'+esc(s.subscription_status==='trialing'?bDate(s.trial_ends_at):'—')+'</td><td class="num">'+(Number(s.active_employees)||0)+'</td>'
+      +'<td class="num">'+(s.billing_amount?esc(fmtZAR(s.billing_amount)):'—')+'</td><td>'+esc(bDate(s.next_billing_date))+'</td><td>'+btns+'</td></tr>';
+  }).join('');
+  return '<div class="card" style="margin-bottom:14px;"><div class="card-header"><div class="card-title">Subscriptions (PayFast)</div></div>'
+    +'<div class="helptext" style="margin-bottom:10px;">'+c.active+' active · '+c.trialing+' on trial · '+c.past_due+' payment failed · '+c.canceled+' cancelled · monthly recurring '+esc(fmtZAR(mrr))+' incl. VAT. Admins and staff are never billed; making someone an admin switches billing off for them automatically.</div>'
+    +'<div class="table-wrap"><table><thead><tr><th>User</th><th>Role</th><th>Status</th><th>Trial ends</th><th class="num">Employees</th><th class="num">Last charge</th><th>Next payment</th><th>Override</th></tr></thead><tbody>'
+    +(rows || '<tr><td colspan="8" class="empty-row">No accounts yet.</td></tr>')+'</tbody></table></div></div>';
+}
+function wireBillingEvents(){
+  var sb1 = document.getElementById('subStartBtn'); if(sb1) sb1.onclick = function(){ startCheckout(sb1); };
+  var sb2 = document.getElementById('subCancelBtn'); if(sb2) sb2.onclick = async function(){
+    if(!confirm('Cancel your subscription? You keep full access until your next payment date and will not be charged again.')) return;
+    if(await setCancelRequested(true)) render();
+  };
+  var sb3 = document.getElementById('subResumeBtn'); if(sb3) sb3.onclick = async function(){ if(await setCancelRequested(false)) render(); };
+  document.querySelectorAll('[data-sub-action]').forEach(function(el){
+    el.onclick = async function(){
+      var act = el.dataset.subAction;
+      var labels = {extend_trial:'extend the trial by 14 days', mark_active:'mark as paid (outside PayFast)', exempt:'stop billing', restart_trial:'restart a 14-day trial'};
+      if(!confirm('Do you want to '+labels[act]+' for this user?')) return;
+      el.disabled = true;
+      var res = await sb.rpc('admin_set_billing', {uid:el.dataset.uid, action:act});
+      if(res.error){ alert('That did not work: '+res.error.message); el.disabled = false; return; }
+      logActivity('billing.'+act, el.dataset.uid);
+      await loadSubs(); render();
+    };
+  });
+  document.querySelectorAll('[data-sub-admin]').forEach(function(el){
+    el.onclick = async function(){
+      if(!confirm('Make '+(el.dataset.email||'this person')+' an administrator? Admins see every company, manage billing and approve users, and are never billed.')) return;
+      if(await reviewAccount(el.dataset.subAdmin, 'approve', 'admin')){ await loadSubs(); render(); }
+    };
+  });
 }
 
 /* ---------- Backup & Restore ---------- */
@@ -3845,11 +4128,20 @@ function renderReports(){
 
 /* ===================== Event wiring ===================== */
 function wireRouteEvents(){
+  var retryAcc = document.getElementById('retryAccountsBtn');
+  if(retryAcc) retryAcc.onclick = async function(){ retryAcc.disabled = true; await loadAccounts(); render(); };
   document.querySelectorAll('[data-approve-account]').forEach(function(el){
     el.onclick = async function(){
       var role = el.dataset.role||'client';
       el.disabled = true;
       if(await reviewAccount(el.dataset.approveAccount, 'approve', role)) render(); else el.disabled = false;
+    };
+  });
+  document.querySelectorAll('[data-make-admin]').forEach(function(el){
+    el.onclick = async function(){
+      var a = state.accounts.find(function(x){ return x.id===el.dataset.makeAdmin; });
+      if(!confirm('Make '+(a?a.email:'this person')+' an administrator? Admins can see every company, manage billing and approve other users.')) return;
+      if(await reviewAccount(el.dataset.makeAdmin, 'approve', 'admin')) render();
     };
   });
   document.querySelectorAll('[data-client-companies]').forEach(function(el){
@@ -3869,6 +4161,7 @@ function wireRouteEvents(){
       if(await reviewAccount(el.dataset.deactivateAccount, 'deactivate')) render();
     };
   });
+  wireBillingEvents();
   var bm = document.getElementById('billMonth');
   if(bm) bm.onchange = function(){ if(bm.value){ state.billingMonth = bm.value; render(); } };
   var brb = document.getElementById('billRateBtn'); if(brb) brb.onclick = openRateCardModal;
@@ -4983,5 +5276,4 @@ checkAuthAndBoot();
 
 })();
 </script>
-
 </body></html>
