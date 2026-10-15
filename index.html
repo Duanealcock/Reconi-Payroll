@@ -2697,11 +2697,12 @@ async function loadClientRate(){
   state.clientRate = null;
   if(sb && isClient()){
     try{
-      var res = await sb.from('billing_settings').select('*').eq('id',1).maybeSingle();
-      if(!res.error && res.data){ var c = billingFromRow(res.data); if(billingConfigured(c)) state.clientRate = c; }
-    }catch(e){}
+      // The saved rate card, read through a safe function so the preview always equals what PayFast will charge.
+      var res = await sb.rpc('rate_card');
+      var r = !res.error && res.data && (Array.isArray(res.data) ? res.data[0] : res.data);
+      if(r){ var c = billingFromRow(r); if(billingConfigured(c)) state.clientRate = c; }
+    }catch(e){ console.log('rate_card', e); }
   }
-  if(!state.clientRate) state.clientRate = simplePayRateCard();
 }
 var lastReadOnlyAlert = 0;
 function reportReadOnly(){
@@ -2744,7 +2745,10 @@ function renderSubscription(){
   if(!b){
     return title+'<div class="card">We could not load your subscription details yet. If this keeps happening, contact Alcock Consulting.</div>';
   }
-  var rate = state.clientRate || simplePayRateCard();
+  var rate = state.clientRate;
+  if(!rate){
+    return title+'<div class="card">Pricing for your plan is not available yet. Please contact Alcock Consulting, or try again in a moment.</div>';
+  }
   var n = b.activeEmployees;
   var bill = computeBill(n, rate);
   var notice = state.billingNotice ? '<div class="pending-box" style="margin-bottom:14px;">'+esc(state.billingNotice)+'</div>' : '';
