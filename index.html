@@ -1991,6 +1991,8 @@ function renderPayrunDetail(runId){
     +'<td>'+fmtZAR(l.uifEmployee)+'</td><td>'+fmtZAR(l.totalDeductions)+'</td><td><b>'+fmtZAR(l.netPay)+'</b></td>'
     +'<td><span class="link-btn" data-view-payslip="'+r.id+'|'+l.employeeId+'">Payslip</span>'
       +(canOvertime?' &nbsp; <span class="link-btn" data-edit-overtime="'+r.id+'|'+l.employeeId+'">'+(hasPremium?'Edit':'Add')+' overtime / Sunday / holiday hours</span>':'')
+      +(canOvertime?' &nbsp; <span class="link-btn" data-recalc-line="'+r.id+'|'+l.employeeId+'" title="Recalculate this payslip from the employee\'s current details">Recalculate</span>':'')
+      +(r.status==='draft'?' &nbsp; <span class="link-btn" style="color:var(--red);" data-remove-line="'+r.id+'|'+l.employeeId+'">Remove</span>':'')
     +'</td></tr>';
   }).join('');
   return ''
@@ -1998,6 +2000,8 @@ function renderPayrunDetail(runId){
     +'<div class="topbar-right page-actions">'
       +'<button class="btn" data-route-link="payruns">← Back to pay runs</button>'
       +(r.status==='finalized' ? '<button class="btn" id="printAllPayslipsBtn" data-run="'+r.id+'">Print all payslips</button>' : '')
+      +(r.status==='finalized' ? '<button class="btn" id="reopenRunBtn" data-run="'+r.id+'">Reopen pay run</button>' : '')
+      +(r.status==='draft' ? '<button class="btn" id="addPayslipBtn" data-run="'+r.id+'">+ Add payslip</button>' : '')
       +(r.status==='draft' ? '<button class="btn btn-primary" id="finalizeRunBtn" data-run="'+r.id+'">Finalize pay run</button>' : '')
     +'</div></div>'
   +'<div class="stat-grid">'
@@ -2007,7 +2011,9 @@ function renderPayrunDetail(runId){
     +statCard('NET PAY', fmtZAR(r.totals.netPay), 'Total paid to employees')
   +'</div>'
   +'<div class="card"><div class="table-wrap"><table><thead><tr><th>Employee</th><th>Gross</th><th>PAYE</th><th>UIF (emp.)</th><th>Total deductions</th><th>Net pay</th><th></th></tr></thead><tbody>'
-  +rows+'</tbody></table></div></div>';
+  +(rows || '<tr><td colspan="7" class="empty-row">No payslips in this pay run. Use + Add payslip.</td></tr>')+'</tbody></table></div></div>'
+  +(r.status==='draft' ? '<div class="disclaimer">This pay run is a draft: you can add payslips for employees who were missed, recalculate or remove payslips, and edit overtime hours. Finalize when it is right.</div>'
+     : '<div class="disclaimer">Finalized runs are locked. Use <b>Reopen pay run</b> to turn it back into a draft, make your changes (e.g. add a missing employee) and finalize again.</div>');
 }
 
 /* ---------- Payslips ---------- */
@@ -4231,6 +4237,16 @@ function wireRouteEvents(){
 
   var newRunBtn = document.getElementById('newRunBtn');
   if(newRunBtn) newRunBtn.onclick = openNewRunModal;
+  var reopenBtn = document.getElementById('reopenRunBtn');
+  if(reopenBtn) reopenBtn.onclick = function(){ reopenRun(reopenBtn.dataset.run); };
+  var addPsBtn = document.getElementById('addPayslipBtn');
+  if(addPsBtn) addPsBtn.onclick = function(){ openAddPayslipModal(addPsBtn.dataset.run); };
+  document.querySelectorAll('[data-remove-line]').forEach(function(el){
+    el.onclick = function(){ var p = el.dataset.removeLine.split('|'); removeRunLine(p[0], p[1]); };
+  });
+  document.querySelectorAll('[data-recalc-line]').forEach(function(el){
+    el.onclick = function(){ var p = el.dataset.recalcLine.split('|'); recalcRunLine(p[0], p[1]); };
+  });
   var finalizeBtn = document.getElementById('finalizeRunBtn');
   if(finalizeBtn) finalizeBtn.onclick = function(){ finalizeRun(finalizeBtn.dataset.run); };
   var printAllPayslipsBtn = document.getElementById('printAllPayslipsBtn');
@@ -5166,9 +5182,104 @@ function openNewRunModal(){
     renderCustom();
   };
 }
+function sumRunLines(lines){
+  return lines.reduce(function(t,l){
+    t.gross+=l.gross; t.paye+=l.paye; t.uifEmployee+=l.uifEmployee; t.uifEmployer+=l.uifEmployer;
+    t.sdlEmployer+=l.sdlEmployer; t.netPay+=l.netPay; t.employerCost+=l.employerCost; return t;
+  }, {gross:0,paye:0,uifEmployee:0,uifEmployer:0,sdlEmployer:0,netPay:0,employerCost:0});
+}
+/* Carry a payslip's saved hours into calcPayslipLine so it can be recalculated from the employee's current details. */
+function extraFromLine(line){
+  var ex = {};
+  if(line.normalHours) ex.normalHours = line.normalHours;
+  var hasSun = (line.sundayEntries||[]).length>0, hasHol = (line.holidayEntries||[]).length>0;
+  ex.overtimeHours = hasHol ? (line.weekdayOvertimeHours!=null ? line.weekdayOvertimeHours : 0) : (line.overtimeHours||0);
+  ex.overtimeRate = line.overtimeRate; ex.sundayRate = line.sundayRate; ex.publicHolidayRate = line.publicHolidayRate;
+  if(hasSun) ex.sundayEntries = line.sundayEntries; else ex.sundayHours = line.sundayHours||0;
+  if(hasHol) ex.holidayEntries = line.holidayEntries; else ex.publicHolidayHours = line.publicHolidayHours||0;
+  return ex;
+}
+async function reopenRun(runId){
+  var r = state.payruns.find(function(x){return x.id===runId;});
+  if(!r || r.status!=='finalized') return;
+  var rec = emp201Record(r.periodYear, r.periodMonth);
+  var warn = (rec && rec.filedDate) ? '\n\nNOTE: the EMP201 for this period is marked as filed ('+rec.filedDate+'). Changing this run changes the figures, so you may need to file a correction with SARS.' : '';
+  if(!confirm('Reopen "'+r.periodLabel+'"? It goes back to a draft so you can add or change payslips. EMP201, EMP501, UIF and reports ignore it until you finalize it again.'+warn)) return;
+  r.status = 'draft'; r.finalizedAt = null;
+  var ok = await savePayrun(r);
+  if(ok===false){ r.status = 'finalized'; r.finalizedAt = r.finalizedAt || Date.now(); renderCustom(); return; }
+  logActivity('payrun.reopen', r.periodLabel);
+  renderCustom();
+}
+function openAddPayslipModal(runId){
+  var r = state.payruns.find(function(x){return x.id===runId;});
+  if(!r || r.status!=='draft') return;
+  var inRun = {}; r.lines.forEach(function(l){ inRun[l.employeeId] = 1; });
+  var candidates = companyEmployees('active').filter(function(e){ return !inRun[e.id]; })
+    .sort(function(a,b){ return (a.firstName+a.lastName).localeCompare(b.firstName+b.lastName); });
+  if(!candidates.length){
+    openModal('<h2>Add payslip</h2><div class="helptext">Every active employee already has a payslip in this pay run. To add someone, first add them under Employees (status active).</div>'
+      +'<div class="modal-actions"><button class="btn btn-primary" id="apClose">OK</button></div>');
+    document.getElementById('apClose').onclick = closeModal;
+    return;
+  }
+  var rows = candidates.map(function(e){
+    var match = payCycleOf(e)===(r.payCycle||'monthly');
+    return '<label style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);">'
+      +'<input type="checkbox" class="apChk" value="'+esc(e.id)+'"'+(match?' checked':'')+'>'
+      +'<span><b>'+esc((e.firstName+' '+e.lastName).trim())+'</b> <span class="stat-caption">'+esc(PAY_CYCLES[payCycleOf(e)].label)+(match?'':' — different pay cycle from this run')+'</span></span></label>';
+  }).join('');
+  openModal('<h2>Add payslip</h2>'
+    +'<div class="helptext">Pick the employees to add to <b>'+esc(r.periodLabel)+'</b>. Their payslip is calculated from their current employee details; you can then add overtime hours or recalculate.</div>'
+    +'<div style="max-height:320px;overflow:auto;margin:10px 0;">'+rows+'</div>'
+    +'<div class="modal-actions"><button class="btn" id="apCancel">Cancel</button><button class="btn btn-primary" id="apAdd">Add selected</button></div>');
+  document.getElementById('apCancel').onclick = closeModal;
+  document.getElementById('apAdd').onclick = async function(){
+    var ids = Array.prototype.map.call(document.querySelectorAll('.apChk:checked'), function(c){ return c.value; });
+    if(!ids.length){ alert('Select at least one employee.'); return; }
+    var company = currentCompany();
+    var before = r.lines.slice(), beforeTotals = r.totals;
+    ids.forEach(function(id){ var emp = employeeById(id); if(emp) r.lines.push(calcPayslipLine(emp, company)); });
+    r.totals = sumRunLines(r.lines);
+    var ok = await savePayrun(r);
+    if(ok===false){ r.lines = before; r.totals = beforeTotals; closeModal(); renderCustom(); return; }
+    logActivity('payrun.addpayslip', ids.map(function(id){ var e = employeeById(id); return e ? (e.firstName+' '+e.lastName).trim() : id; }).join(', ')+' added to '+r.periodLabel);
+    closeModal(); renderCustom();
+  };
+}
+async function removeRunLine(runId, employeeId){
+  var r = state.payruns.find(function(x){return x.id===runId;});
+  if(!r || r.status!=='draft') return;
+  var line = r.lines.find(function(l){return l.employeeId===employeeId;});
+  if(!line) return;
+  if(!confirm('Remove the payslip for '+line.employeeName+' from this pay run?')) return;
+  var before = r.lines.slice(), beforeTotals = r.totals;
+  r.lines = r.lines.filter(function(l){return l.employeeId!==employeeId;});
+  r.totals = sumRunLines(r.lines);
+  var ok = await savePayrun(r);
+  if(ok===false){ r.lines = before; r.totals = beforeTotals; renderCustom(); return; }
+  logActivity('payrun.removepayslip', line.employeeName+' removed from '+r.periodLabel);
+  renderCustom();
+}
+async function recalcRunLine(runId, employeeId){
+  var r = state.payruns.find(function(x){return x.id===runId;});
+  var emp = employeeById(employeeId);
+  if(!r || r.status!=='draft' || !emp) return;
+  var idx = r.lines.findIndex(function(l){return l.employeeId===employeeId;});
+  if(idx<0) return;
+  if(!confirm('Recalculate the payslip for '+(emp.firstName+' '+emp.lastName).trim()+' from their current employee details? Overtime hours already captured are kept.')) return;
+  var before = r.lines[idx], beforeTotals = r.totals;
+  r.lines[idx] = calcPayslipLine(emp, currentCompany(), extraFromLine(before));
+  r.totals = sumRunLines(r.lines);
+  var ok = await savePayrun(r);
+  if(ok===false){ r.lines[idx] = before; r.totals = beforeTotals; renderCustom(); return; }
+  logActivity('payrun.recalc', r.lines[idx].employeeName+' recalculated on '+r.periodLabel);
+  renderCustom();
+}
 async function finalizeRun(runId){
   var r = state.payruns.find(function(x){return x.id===runId;});
   if(!r) return;
+  if(!r.lines.length){ alert('This pay run has no payslips. Add at least one payslip before finalizing.'); return; }
   if(!confirm('Finalize this pay run? Payslips will be generated and figures will be locked.')) return;
   r.status='finalized'; r.finalizedAt = Date.now();
   await savePayrun(r);
