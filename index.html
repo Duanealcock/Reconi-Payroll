@@ -590,6 +590,8 @@ var TAX_BRACKETS = [
 var REBATE_PRIMARY = 17820, REBATE_SECONDARY = 9765, REBATE_TERTIARY = 3249;
 var UIF_CEILING_MONTHLY = 17712, UIF_RATE = 0.01;
 var SDL_RATE = 0.01, SDL_ANNUAL_THRESHOLD = 500000;
+/* Fourth Schedule: PAYE is withheld on 80% of a travel allowance (20% if the employer is satisfied that at least 80% of the travel is for business). */
+var TRAVEL_ALLOWANCE_TAXABLE_PCT = 80;
 /* Section 11F combined cap on pension/provident/RA contribution deductions.
    Raised from R350,000 to R430,000 by Budget 2026, effective 1 March 2026 (2026/27 tax year). */
 var RETIREMENT_DEDUCTION_ANNUAL_CAP = 430000;
@@ -618,8 +620,8 @@ function annualTaxOn(taxableAnnual){
 function medicalCreditMonthly(dependants){
   dependants = Number(dependants)||0;
   if(dependants<=0) return 0;
-  if(dependants===1) return 376;
-  return 752 + 254*(dependants-1);
+  if(dependants===1) return 376;          // main member only
+  return 752 + 254*(dependants-2);         // member + first dependant (376 each) + R254 per further dependant
 }
 // Hourly rate used for overtime / Sunday / public-holiday premiums.
 // Hourly staff: their hourly rate. Monthly-paid staff: basic pay divided by
@@ -678,15 +680,18 @@ function calcPayslipLine(emp, company, extra){
   var travel = hasAdj('travel') ? (Number(adj.travel)||0) : (Number(emp.travelAllowance)||0);
   var other = hasAdj('other') ? (Number(adj.other)||0) : (Number(emp.otherAllowance)||0);
   var bonus = Math.max(0, Number(adj.bonus)||0);   // one-off: taxed with the SARS bonus method, not annualised
-  var gross = basic + premiumPay + travel + other + bonus;
-  var annualGross = (gross - bonus)*periodsPerYear;
+  var commission = Math.max(0, Number(extra.commission)||0);   // regular remuneration: annualised with the rest of the period's pay
+  var travelPct = hasAdj('travelPct') ? Math.min(100, Math.max(0, Number(adj.travelPct)||0)) : TRAVEL_ALLOWANCE_TAXABLE_PCT;
+  var gross = basic + premiumPay + travel + other + bonus + commission;
+  var taxableEarnings = gross - travel*(1 - travelPct/100);   // what PAYE is worked out on (before retirement deductions)
+  var annualGross = (gross - bonus)*periodsPerYear;            // remuneration, for the 27.5% retirement cap
   var retPerPeriod = hasAdj('retirement') ? (Number(adj.retirement)||0) : (Number(emp.retirementContribution)||0);
   var raPerPeriod = hasAdj('ra') ? (Number(adj.ra)||0) : (Number(emp.raContribution)||0);
   var raDeductedFromPay = !!emp.raDeductedFromPay;
   var combinedRetirementAnnualRaw = (retPerPeriod + raPerPeriod)*periodsPerYear;
   var retirementCap = Math.min(0.275*annualGross, RETIREMENT_DEDUCTION_ANNUAL_CAP);
   var combinedRetirementAnnual = Math.min(combinedRetirementAnnualRaw, retirementCap);
-  var taxableAnnual = Math.max(0, annualGross - combinedRetirementAnnual);
+  var taxableAnnual = Math.max(0, (taxableEarnings - bonus)*periodsPerYear - combinedRetirementAnnual);
   var taxAnnual = annualTaxOn(taxableAnnual);
   var age = ageFromDOB(emp.dob);
   var rebate = REBATE_PRIMARY + (age!==null && age>=65?REBATE_SECONDARY:0) + (age!==null && age>=75?REBATE_TERTIARY:0);
@@ -719,7 +724,7 @@ function calcPayslipLine(emp, company, extra){
     sundayHours: sundayHours, sundayRate: sundayRate, sundayPay: sundayPay,
     publicHolidayHours: publicHolidayHours, publicHolidayRate: publicHolidayRate, publicHolidayPay: publicHolidayPay,
     hourlyRateUsed: rate,
-    travelAllowance: travel, otherAllowance: other, bonus: bonus, bonusNote: bonus>0 ? String(adj.bonusNote||'') : '', gross: gross,
+    travelAllowance: travel, travelTaxablePct: travelPct, taxableEarnings: taxableEarnings, commission: commission, otherAllowance: other, bonus: bonus, bonusNote: bonus>0 ? String(adj.bonusNote||'') : '', gross: gross,
     retirementDeduction: retPerPeriod, raContribution: raPerPeriod, raDeductedFromPay: raDeductedFromPay,
     raDeductionFromPay: raDeductionFromPay, retirementTaxDeduction: combinedRetirementAnnual/periodsPerYear,
     medicalAidDeduction: medicalAidDed, otherDeduction: otherDed, otherDeductionNote: otherDed>0 ? String(adj.otherDedNote||'') : '',
@@ -2002,7 +2007,7 @@ function renderPayrunDetail(runId){
     return '<tr><td>'+esc(l.employeeName)+(premCaption.length?' <span class="stat-caption">('+premCaption.join(', ')+')</span>':'')+'</td><td>'+fmtZAR(l.gross)+'</td><td>'+fmtZAR(l.paye)+'</td>'
     +'<td>'+fmtZAR(l.uifEmployee)+'</td><td>'+fmtZAR(l.totalDeductions)+'</td><td><b>'+fmtZAR(l.netPay)+'</b></td>'
     +'<td><span class="link-btn" data-view-payslip="'+r.id+'|'+l.employeeId+'">Payslip</span>'
-      +(canOvertime?' &nbsp; <span class="link-btn" data-edit-overtime="'+r.id+'|'+l.employeeId+'">'+(hasPremium?'Edit':'Add')+' overtime / Sunday / holiday hours</span>':'')
+      +(canOvertime?' &nbsp; <span class="link-btn" data-edit-overtime="'+r.id+'|'+l.employeeId+'">'+(hasPremium?'Edit':'Add')+' hours &amp; commission</span>':'')
       +(canOvertime?' &nbsp; <span class="link-btn" data-edit-payslip="'+r.id+'|'+l.employeeId+'">Edit payslip</span>':'')
       +(canOvertime?' &nbsp; <span class="link-btn" data-recalc-line="'+r.id+'|'+l.employeeId+'" title="Recalculate this payslip from the employee\'s current details">Recalculate</span>':'')
       +(r.status==='draft'?' &nbsp; <span class="link-btn" style="color:var(--red);" data-remove-line="'+r.id+'|'+l.employeeId+'">Remove</span>':'')
@@ -2129,7 +2134,7 @@ function ytdForEmployee(r, employeeId){
     if(b.end < start || b.end > end) return;
     (x.lines||[]).forEach(function(l){
       if(l.employeeId!==employeeId) return;
-      out.taxable += Number(l.gross)||0; out.paye += Number(l.paye)||0;
+      out.taxable += (l.taxableEarnings!=null ? Number(l.taxableEarnings) : Number(l.gross))||0; out.paye += Number(l.paye)||0;
     });
   });
   return out;
@@ -2179,6 +2184,7 @@ function payslipCardHtml(r, line, emp, c){
   E.push({label:'Public holiday worked @ '+line.publicHolidayRate+'x', units:line.publicHolidayHours, amount:line.publicHolidayPay});
   E.push({label:'Travel allowance', units:'', amount:line.travelAllowance});
   E.push({label:'Other allowance', units:'', amount:line.otherAllowance});
+  E.push({label:'Commission', units:'', amount:line.commission||0});
   E.push({label:'Bonus / extra earnings'+(line.bonusNote?' — '+line.bonusNote:''), units:'', amount:line.bonus||0});
   D.push({label:'PAYE (income tax)', amount:line.paye});
   D.push({label:'Unemployment insurance fund', amount:line.uifEmployee});
@@ -3492,10 +3498,10 @@ function easyCollect(cache){
       (r.lines||[]).forEach(function(l){
         var a = agg[l.employeeId] || (agg[l.employeeId] = {employeeId:l.employeeId, periods:0, basic:0, ot:0, travel:0, other:0, ret:0, ra:0, med:0, paye:0, uif:0, sdl:0, credit:0});
         var ot = (l.overtimePay||0)+(l.sundayPay||0)+(l.publicHolidayPay||0);
-        var travel = l.travelAllowance||0, other = l.otherAllowance||0, bonus = l.bonus||0;
+        var travel = l.travelAllowance||0, other = l.otherAllowance||0, bonus = l.bonus||0, comm = l.commission||0;
         a.periods++;
-        a.ot += ot; a.travel += travel; a.other += other; a.bonus = (a.bonus||0) + bonus;
-        a.basic += (l.gross||0) - ot - travel - other - bonus;
+        a.ot += ot; a.travel += travel; a.other += other; a.bonus = (a.bonus||0) + bonus; a.comm = (a.comm||0) + comm;
+        a.basic += (l.gross||0) - ot - travel - other - bonus - comm;
         a.ret += l.retirementDeduction||0;
         a.ra += l.raDeductionFromPay != null ? (l.raDeductionFromPay||0) : (l.raDeductedFromPay ? (l.raContribution||0) : 0);
         a.med += l.medicalAidDeduction||0;
@@ -3631,7 +3637,7 @@ function easyBuild(ctx){
 
     /* amounts: whole rand for income/deduction codes, cents for tax codes */
     var inc = {
-      '3601': Math.round(a.basic), '3605': Math.round(a.bonus||0), '3607': Math.round(a.ot), '3701': Math.round(a.travel), '3713': Math.round(a.other)
+      '3601': Math.round(a.basic), '3605': Math.round(a.bonus||0), '3606': Math.round(a.comm||0), '3607': Math.round(a.ot), '3701': Math.round(a.travel), '3713': Math.round(a.other)
     };
     var income = 0; Object.keys(inc).forEach(function(k){ income += inc[k]; });
     var ded = { '4001': Math.round(a.ret), '4006': Math.round(a.ra), '4005': Math.round(a.med) };
@@ -3664,7 +3670,7 @@ function easyBuild(ctx){
       rec.push(['3240','2'], ['3241', easyQ(easyDigits(emp.accountNumber))], ['3242', easyDigits(emp.branchCode)], ['3245', easyQ(surname)], ['3246', /sav/i.test(emp.accountType||'') ? '2' : '1']);
     } else rec.push(['3240','0']);
     rec.push(['3288', easyQ('1')], ['3026', easyQ('N')]);
-    ['3601','3605','3607','3701','3713'].forEach(function(k){ if(inc[k]>0) rec.push([k, String(inc[k])]); });
+    ['3601','3605','3606','3607','3701','3713'].forEach(function(k){ if(inc[k]>0) rec.push([k, String(inc[k])]); });
     rec.push(['3699', String(income)]);
     ['4001','4006','4005'].forEach(function(k){ if(ded[k]>0) rec.push([k, String(ded[k])]); });
     if(deductions>0) rec.push(['4497', String(deductions)]);
@@ -3825,7 +3831,7 @@ function easyCardHtml(ctx){
       +'<input type="file" id="easyCheckInput" accept=".txt,text/plain" style="display:none">'
       +(ok?'':' <span class="link-btn" id="easyForceBtn">Export anyway (for review only)</span>')
     +'</div>'
-    +'<div class="helptext" style="margin-top:10px;">Field mapping used: income 3601 basic pay · 3605 bonus / one-off earnings · 3607 overtime / Sunday / public-holiday pay · 3701 travel allowance · 3713 other allowances · 3699 total; deductions 4001 retirement fund · 4006 RA deducted from pay · 4005 medical aid · 4497 total; 4102 PAYE · 4116 medical credit · 4141 UIF (employee + employer) · 4142 SDL · 4149 total. Code meanings were inferred from a working Sage export and common SARS usage — compare with the current SARS e@syFile specification and import a TEST file first.</div>'
+    +'<div class="helptext" style="margin-top:10px;">Field mapping used: income 3601 basic pay · 3605 bonus / one-off earnings · 3606 commission · 3607 overtime / Sunday / public-holiday pay · 3701 travel allowance · 3713 other allowances · 3699 total; deductions 4001 retirement fund · 4006 RA deducted from pay · 4005 medical aid · 4497 total; 4102 PAYE · 4116 medical credit · 4141 UIF (employee + employer) · 4142 SDL · 4149 total. Code meanings were inferred from a working Sage export and common SARS usage — compare with the current SARS e@syFile specification and import a TEST file first.</div>'
   +'</div>';
 }
 function downloadEasyFile(force){
@@ -5058,9 +5064,12 @@ function openOvertimeModal(runId, employeeId){
     +holidayRows
     +'<div style="margin-top:10px;"><span class="link-btn" id="otAddDay">+ Add another date (e.g. election day)</span></div>'
     +'<div style="'+rowStyle+'margin-top:12px;">'+lbl('Public holiday multiplier ('+(isMonthly?'1x top-up on top of the monthly salary, which already covers the holiday':'2x for hourly-paid staff')+')')+'<input type="number" min="0" step="0.05" id="pRate" value="'+(line.publicHolidayRate||dr.publicHoliday)+'"></div>'
+    +'<h3 style="margin:16px 0 6px;color:#1f4fa3;font-size:13.5px;">Commission</h3>'
+    +'<div style="'+rowStyle+'">'+lbl('Commission for this pay period (R)')+'<input type="number" min="0" step="0.01" id="oCommission" value="'+(line.commission||'')+'" placeholder="0.00"></div>'
+    +'<div class="helptext" style="margin-top:4px;">Commission is taxable remuneration: it is added to gross pay, so PAYE (worked out on this period\'s pay), UIF and SDL are calculated on it. For irregular or very large commission, SARS allows the averaging method — use Edit payslip to enter a PAYE amount manually.</div>'
     +'<div id="otPreview" class="stat-caption" style="margin-top:10px;"></div>'
     +'<div class="helptext" style="margin-top:8px;">Overtime on a public holiday is paid at the overtime multiplier, on top of the holiday hours. BCEA limits: overtime by agreement only, normally no more than 3 hours a day or 10 hours a week; overtime/Sunday/public-holiday rules apply to employees below the BCEA earnings threshold. Premium pay is included in gross pay, so PAYE, UIF and SDL are calculated on it.</div>'
-    +'<div class="modal-actions"><button class="btn" id="cancelOvertimeBtn">Cancel</button><button class="btn btn-primary" id="saveOvertimeBtn">Save hours</button></div>'
+    +'<div class="modal-actions"><button class="btn" id="cancelOvertimeBtn">Cancel</button><button class="btn btn-primary" id="saveOvertimeBtn">Save</button></div>'
   );
   function readExtra(){
     var sundayEntries = [], holMap = {};
@@ -5075,7 +5084,7 @@ function openOvertimeModal(runId, employeeId){
     });
     var out = {
       overtimeHours:numVal('oHours'), overtimeRate:numVal('oRate'),
-      sundayRate:numVal('sRate'), publicHolidayRate:numVal('pRate'),
+      sundayRate:numVal('sRate'), publicHolidayRate:numVal('pRate'), commission:numVal('oCommission'),
       sundayEntries:sundayEntries, holidayEntries:Object.keys(holMap).map(function(k){return holMap[k];})
     };
     var nEl = document.getElementById('oNormal'); if(nEl) out.normalHours = Number(nEl.value)||0;
@@ -5086,7 +5095,7 @@ function openOvertimeModal(runId, employeeId){
     var l = calcPayslipLine(emp, currentCompany(), exP);
     var el = document.getElementById('otPreview');
     if(!el) return;
-    el.innerHTML = 'Overtime '+l.overtimeHours+'h = '+fmtZAR(l.overtimePay)+' · Sunday '+l.sundayHours+'h = '+fmtZAR(l.sundayPay)+' · Public holiday '+l.publicHolidayHours+'h = '+fmtZAR(l.publicHolidayPay)
+    el.innerHTML = (l.commission>0 ? 'Commission '+fmtZAR(l.commission)+' · ' : '')+'Overtime '+l.overtimeHours+'h = '+fmtZAR(l.overtimePay)+' · Sunday '+l.sundayHours+'h = '+fmtZAR(l.sundayPay)+' · Public holiday '+l.publicHolidayHours+'h = '+fmtZAR(l.publicHolidayPay)
       +' → new gross <b>'+fmtZAR(l.gross)+'</b>, net pay <b>'+fmtZAR(l.netPay)+'</b>';
   }
   function wirePreview(root){
@@ -5217,6 +5226,7 @@ function sumRunLines(lines){
 function extraFromLine(line){
   var ex = {};
   if(line.adj) ex.adj = line.adj;
+  if(line.commission) ex.commission = line.commission;
   if(line.normalHours) ex.normalHours = line.normalHours;
   var hasSun = (line.sundayEntries||[]).length>0, hasHol = (line.holidayEntries||[]).length>0;
   ex.overtimeHours = hasHol ? (line.weekdayOvertimeHours!=null ? line.weekdayOvertimeHours : 0) : (line.overtimeHours||0);
@@ -5323,6 +5333,7 @@ function openEditPayslipModal(runId, employeeId){
       +(hourly ? num('epHours','Normal hours worked',line.normalHours||emp.standardHours) : num('epBasic','Basic pay',line.basic))
       +num('epTravel','Travel allowance',line.travelAllowance)
       +num('epOther','Other allowance',line.otherAllowance)
+      +num('epCommission','Commission',line.commission||0)
       +num('epBonus','Bonus / extra earnings (one-off)',line.bonus||0)
       +'<div class="form-field"><label>Bonus description (shown on payslip)</label><input type="text" id="epBonusNote" value="'+esc(line.bonusNote||'')+'" placeholder="e.g. Year-end bonus"></div>'
     +'</div>'
@@ -5334,6 +5345,9 @@ function openEditPayslipModal(runId, employeeId){
       +'<div class="form-field"><label>Other deduction description</label><input type="text" id="epOtherDedNote" value="'+esc(line.otherDeductionNote||'')+'" placeholder="e.g. Staff loan"></div>'
     +'</div>'
     +'<h3 style="margin:12px 0 6px;">PAYE</h3><div class="form-grid">'
+      +'<div class="form-field"><label>Travel allowance taxable portion</label><select id="epTravelPct">'
+        +[80,20,100].map(function(p){ return '<option value="'+p+'"'+((line.travelTaxablePct!=null?line.travelTaxablePct:80)===p?' selected':'')+'>'+p+'%'+(p===80?' (standard)':(p===20?' (≥80% business travel)':' (fully taxable)'))+'</option>'; }).join('')
+      +'</select></div>'
       +'<div class="form-field"><label>PAYE</label><select id="epPayeMode"><option value="auto"'+(payeAuto?' selected':'')+'>Calculate automatically</option><option value="manual"'+(!payeAuto?' selected':'')+'>Enter manually</option></select></div>'
       +num('epPaye','Manual PAYE amount',line.paye)
     +'</div>'
@@ -5354,6 +5368,7 @@ function openEditPayslipModal(runId, employeeId){
     diff('otherDed', n('epOtherDed'), base.otherDeduction);
     if(n('epBonus')>0){ a.bonus = Math.round(n('epBonus')*100)/100; if(g('epBonusNote').trim()) a.bonusNote = g('epBonusNote').trim(); }
     if(n('epOtherDed')>0 && g('epOtherDedNote').trim()) a.otherDedNote = g('epOtherDedNote').trim();
+    if(Number(g('epTravelPct'))!==TRAVEL_ALLOWANCE_TAXABLE_PCT) a.travelPct = Number(g('epTravelPct'));
     if(g('epPayeMode')==='manual') a.paye = Math.round(n('epPaye')*100)/100;
     return a;
   }
@@ -5361,6 +5376,7 @@ function openEditPayslipModal(runId, employeeId){
     var ex = extraFromLine(line);
     if(hourly) ex.normalHours = n('epHours') || ex.normalHours;
     ex.adj = readAdj();
+    ex.commission = n('epCommission');
     return calcPayslipLine(emp, company, ex);
   }
   function refresh(){
@@ -5377,7 +5393,7 @@ function openEditPayslipModal(runId, employeeId){
   refresh();
   document.getElementById('epCancel').onclick = closeModal;
   document.getElementById('epReset').onclick = async function(){
-    if(!confirm('Reset this payslip to the employee record? All changes made here (including any bonus) are removed. Overtime hours are kept.')) return;
+    if(!confirm('Reset this payslip to the employee record? All changes made here (including any bonus) are removed. Overtime hours and commission are kept.')) return;
     await applyPayslipLine(r, line, calcPayslipLine(emp, company, baseEx), 'reset to employee record');
     closeModal(); renderCustom();
   };
