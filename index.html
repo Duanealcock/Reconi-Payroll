@@ -637,7 +637,9 @@ function ordinaryHourlyRate(emp){
 // top-up of 1x, because the holiday itself is already inside the monthly salary.
 function defaultPremiumRates(emp){
   var hourly = emp.payFrequency==='hourly';
-  return {overtime:1.5, sunday:2, publicHoliday: hourly ? 2 : 1};
+  // Hourly-paid staff follow SimplePay's setup used for these employees: overtime 1.5x, Sunday 1.5x (extra 0.5x on hours inside
+  // the normal hours), public-holiday hours worked at the normal rate (1x, public holidays not auto-paid). Monthly-paid: BCEA defaults.
+  return hourly ? {overtime:1.5, sunday:1.5, publicHoliday:1} : {overtime:1.5, sunday:2, publicHoliday:1};
 }
 function calcPayslipLine(emp, company, extra){
   extra = extra || {};
@@ -726,7 +728,7 @@ function calcPayslipLine(emp, company, extra){
     basic: basic, normalHours: normalHours, weekdayOvertimeHours: weekdayOvertimeHours,
     sundayEntries: sundayEntries, holidayEntries: holidayEntries,
     overtimeHours: overtimeHours, overtimeRate: overtimeRate, overtimePay: overtimePay,
-    sundayHours: sundayHours, sundayRate: sundayRate, sundayPay: sundayPay, sundayMode: sundayMode,
+    sundayHours: sundayHours, sundayRate: sundayRate, sundayPay: sundayPay, sundayMode: sundayMode, rv: 2,
     publicHolidayHours: publicHolidayHours, publicHolidayRate: publicHolidayRate, publicHolidayPay: publicHolidayPay,
     hourlyRateUsed: rate,
     travelAllowance: travel, travelTaxablePct: travelPct, taxableEarnings: taxableEarnings, commission: commission, otherAllowance: other, bonus: bonus, bonusNote: bonus>0 ? String(adj.bonusNote||'') : '', gross: gross,
@@ -5065,14 +5067,14 @@ function openOvertimeModal(runId, employeeId){
     +(isMonthly ? '' : '<div style="'+rowStyle+'">'+lbl('Normal hours')+'<input type="number" min="0" step="0.1" id="oNormal" value="'+esc(line.normalHours||emp.standardHours||'')+'" placeholder="'+esc(emp.standardHours||160)+'"></div>'
       +'<div class="helptext" style="margin:-4px 0 8px;">Total ordinary hours worked, <b>including</b> any Sunday hours (SimplePay method: the Sunday hours are then paid only the extra, e.g. 1.5x → an extra 0.5x). Overtime hours are not included here; they are paid in addition. You can change how Sunday hours are paid below.</div>')
     +'<div style="'+rowStyle+'">'+lbl('Overtime hours (weekdays / Saturdays)')+'<input type="number" min="0" step="0.1" id="oHours" value="'+(weekdayOT?weekdayOT:'')+'" placeholder="0.0"></div>'
-    +'<div style="'+rowStyle+'">'+lbl('Overtime multiplier (BCEA default 1.5x)')+'<input type="number" min="0" step="0.05" id="oRate" value="'+(line.overtimeRate||dr.overtime)+'"></div>'
+    +'<div style="'+rowStyle+'">'+lbl('Overtime multiplier (BCEA default 1.5x)')+'<input type="number" min="0" step="0.05" id="oRate" value="'+((line.rv===2&&line.overtimeRate)||dr.overtime)+'"></div>'
     +head('Sundays in this period')
     +sundayRows
-    +'<div style="'+rowStyle+'">'+lbl('Sunday multiplier (2x normally, 1.5x if Sundays are ordinary working days)')+'<input type="number" min="0" step="0.05" id="sRate" value="'+(line.sundayRate||dr.sunday)+'"></div>'
+    +'<div style="'+rowStyle+'">'+lbl(isMonthly ? 'Sunday multiplier (2x normally, 1.5x if Sundays are ordinary working days)' : 'Sunday multiplier (1.5x = the extra 0.5x is paid on the Sunday hours — same as SimplePay)')+'<input type="number" min="0" step="0.05" id="sRate" value="'+((line.rv===2&&line.sundayRate)||dr.sunday)+'"></div>'
     +(isMonthly ? '' : '<div style="'+rowStyle+'">'+lbl('How Sunday hours are paid')+'<select id="sMode"><option value="included"'+((line.sundayMode||'included')==='included'?' selected':'')+'>Hours are inside the normal hours — pay only the extra (multiplier − 1) — SimplePay method</option><option value="additional"'+(line.sundayMode==='additional'?' selected':'')+'>Hours are on top of the normal hours — pay the full multiplier</option></select></div>')
     +holidayRows
     +'<div style="margin-top:10px;"><span class="link-btn" id="otAddDay">+ Add another date (e.g. election day)</span></div>'
-    +'<div style="'+rowStyle+'margin-top:12px;">'+lbl('Public holiday multiplier ('+(isMonthly?'1x top-up on top of the monthly salary, which already covers the holiday':'2x for hourly-paid staff')+')')+'<input type="number" min="0" step="0.05" id="pRate" value="'+(line.publicHolidayRate||dr.publicHoliday)+'"></div>'
+    +'<div style="'+rowStyle+'margin-top:12px;">'+lbl('Public holiday multiplier ('+(isMonthly?'1x top-up on top of the monthly salary, which already covers the holiday':'1x = normal rate for hours worked, as SimplePay with public holidays not auto-paid; use 2x if the contract says double pay')+')')+'<input type="number" min="0" step="0.05" id="pRate" value="'+((line.rv===2&&line.publicHolidayRate)||dr.publicHoliday)+'"></div>'
     +'<h3 style="margin:16px 0 6px;color:#1f4fa3;font-size:13.5px;">Commission</h3>'
     +'<div style="'+rowStyle+'">'+lbl('Commission for this pay period (R)')+'<input type="number" min="0" step="0.01" id="oCommission" value="'+(line.commission||'')+'" placeholder="0.00"></div>'
     +'<div class="helptext" style="margin-top:4px;">Commission is taxable remuneration: it is added to gross pay, so PAYE (worked out on this period\'s pay), UIF and SDL are calculated on it. For irregular or very large commission, SARS allows the averaging method — use Edit payslip to enter a PAYE amount manually.</div>'
@@ -5256,7 +5258,7 @@ function extraFromLine(line){
   if(line.normalHours) ex.normalHours = line.normalHours;
   var hasSun = (line.sundayEntries||[]).length>0, hasHol = (line.holidayEntries||[]).length>0;
   ex.overtimeHours = hasHol ? (line.weekdayOvertimeHours!=null ? line.weekdayOvertimeHours : 0) : (line.overtimeHours||0);
-  ex.overtimeRate = line.overtimeRate; ex.sundayRate = line.sundayRate; ex.publicHolidayRate = line.publicHolidayRate;
+  if(line.rv===2){ ex.overtimeRate = line.overtimeRate; ex.sundayRate = line.sundayRate; ex.publicHolidayRate = line.publicHolidayRate; }
   if(hasSun) ex.sundayEntries = line.sundayEntries; else ex.sundayHours = line.sundayHours||0;
   if(hasHol) ex.holidayEntries = line.holidayEntries; else ex.publicHolidayHours = line.publicHolidayHours||0;
   return ex;
