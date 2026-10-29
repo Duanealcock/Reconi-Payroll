@@ -671,7 +671,11 @@ function calcPayslipLine(emp, company, extra){
     return {hours:h, rate:m, pay: h>0 ? Math.round(rate*h*m*100)/100 : 0};
   };
   var ot = prem('overtimeHours','overtimeRate',dr.overtime);
+  // Hourly-paid staff (SimplePay method): Sunday hours are already inside the normal hours, so only the extra
+  // (multiplier − 1) is paid on them. 'additional': hours are paid in full at the multiplier on top of normal hours.
+  var sundayMode = (extra.sundayMode==='additional' || extra.sundayMode==='included') ? extra.sundayMode : (isHourly ? 'included' : 'additional');
   var sun = prem('sundayHours','sundayRate',dr.sunday);
+  if(sundayMode==='included' && sun.hours>0){ sun.pay = Math.round(rate*sun.hours*Math.max(0, sun.rate-1)*100)/100; }
   var ph = prem('publicHolidayHours','publicHolidayRate',dr.publicHoliday);
   var overtimeHours = ot.hours, overtimeRate = ot.rate, overtimePay = ot.pay;
   var sundayHours = sun.hours, sundayRate = sun.rate, sundayPay = sun.pay;
@@ -722,7 +726,7 @@ function calcPayslipLine(emp, company, extra){
     basic: basic, normalHours: normalHours, weekdayOvertimeHours: weekdayOvertimeHours,
     sundayEntries: sundayEntries, holidayEntries: holidayEntries,
     overtimeHours: overtimeHours, overtimeRate: overtimeRate, overtimePay: overtimePay,
-    sundayHours: sundayHours, sundayRate: sundayRate, sundayPay: sundayPay,
+    sundayHours: sundayHours, sundayRate: sundayRate, sundayPay: sundayPay, sundayMode: sundayMode,
     publicHolidayHours: publicHolidayHours, publicHolidayRate: publicHolidayRate, publicHolidayPay: publicHolidayPay,
     hourlyRateUsed: rate,
     travelAllowance: travel, travelTaxablePct: travelPct, taxableEarnings: taxableEarnings, commission: commission, otherAllowance: other, bonus: bonus, bonusNote: bonus>0 ? String(adj.bonusNote||'') : '', gross: gross,
@@ -2182,7 +2186,7 @@ function payslipCardHtml(r, line, emp, c){
   var E = [], D = [];
   E.push({label:hourly?'Basic salary (hourly)':'Basic salary', units: hourly ? (line.normalHours||'') : '', amount:line.basic, always:true});
   E.push({label:'Overtime @ '+line.overtimeRate+'x', units:line.overtimeHours, amount:line.overtimePay});
-  E.push({label:'Sunday time @ '+line.sundayRate+'x', units:line.sundayHours, amount:line.sundayPay});
+  E.push({label:'Sunday time @ '+line.sundayRate+'x'+(line.sundayMode==='included'?' (extra on normal hours)':''), units:line.sundayHours, amount:line.sundayPay});
   E.push({label:'Public holiday worked @ '+line.publicHolidayRate+'x', units:line.publicHolidayHours, amount:line.publicHolidayPay});
   E.push({label:'Travel allowance', units:'', amount:line.travelAllowance});
   E.push({label:'Other allowance', units:'', amount:line.otherAllowance});
@@ -5059,12 +5063,13 @@ function openOvertimeModal(runId, employeeId){
       +(isMonthly?' (monthly pay ÷ '+(Number(emp.standardHours)>0?Number(emp.standardHours):Math.round(45*52/periodsPerYearOf(emp)*100)/100)+' hours in the period)':'')
       +'. Enter the hours for each date; the multipliers are the BCEA defaults and can be changed to match the contract, bargaining council or sectoral determination.</div>'
     +(isMonthly ? '' : '<div style="'+rowStyle+'">'+lbl('Normal hours')+'<input type="number" min="0" step="0.1" id="oNormal" value="'+esc(line.normalHours||emp.standardHours||'')+'" placeholder="'+esc(emp.standardHours||160)+'"></div>'
-      +'<div class="helptext" style="margin:-4px 0 8px;">Only the ordinary hours that are <b>not</b> entered below. Sunday, public-holiday and overtime hours are paid <b>in addition</b> at their multiplier. Example: 195 total hours including 20 Sunday hours at 1.5x → enter <b>175</b> here and 20 under the Sunday, with the multiplier 1.5.</div>')
+      +'<div class="helptext" style="margin:-4px 0 8px;">Total ordinary hours worked, <b>including</b> any Sunday hours (SimplePay method: the Sunday hours are then paid only the extra, e.g. 1.5x → an extra 0.5x). Overtime hours are not included here; they are paid in addition. You can change how Sunday hours are paid below.</div>')
     +'<div style="'+rowStyle+'">'+lbl('Overtime hours (weekdays / Saturdays)')+'<input type="number" min="0" step="0.1" id="oHours" value="'+(weekdayOT?weekdayOT:'')+'" placeholder="0.0"></div>'
     +'<div style="'+rowStyle+'">'+lbl('Overtime multiplier (BCEA default 1.5x)')+'<input type="number" min="0" step="0.05" id="oRate" value="'+(line.overtimeRate||dr.overtime)+'"></div>'
     +head('Sundays in this period')
     +sundayRows
     +'<div style="'+rowStyle+'">'+lbl('Sunday multiplier (2x normally, 1.5x if Sundays are ordinary working days)')+'<input type="number" min="0" step="0.05" id="sRate" value="'+(line.sundayRate||dr.sunday)+'"></div>'
+    +(isMonthly ? '' : '<div style="'+rowStyle+'">'+lbl('How Sunday hours are paid')+'<select id="sMode"><option value="included"'+((line.sundayMode||'included')==='included'?' selected':'')+'>Hours are inside the normal hours — pay only the extra (multiplier − 1) — SimplePay method</option><option value="additional"'+(line.sundayMode==='additional'?' selected':'')+'>Hours are on top of the normal hours — pay the full multiplier</option></select></div>')
     +holidayRows
     +'<div style="margin-top:10px;"><span class="link-btn" id="otAddDay">+ Add another date (e.g. election day)</span></div>'
     +'<div style="'+rowStyle+'margin-top:12px;">'+lbl('Public holiday multiplier ('+(isMonthly?'1x top-up on top of the monthly salary, which already covers the holiday':'2x for hourly-paid staff')+')')+'<input type="number" min="0" step="0.05" id="pRate" value="'+(line.publicHolidayRate||dr.publicHoliday)+'"></div>'
@@ -5072,6 +5077,8 @@ function openOvertimeModal(runId, employeeId){
     +'<div style="'+rowStyle+'">'+lbl('Commission for this pay period (R)')+'<input type="number" min="0" step="0.01" id="oCommission" value="'+(line.commission||'')+'" placeholder="0.00"></div>'
     +'<div class="helptext" style="margin-top:4px;">Commission is taxable remuneration: it is added to gross pay, so PAYE (worked out on this period\'s pay), UIF and SDL are calculated on it. For irregular or very large commission, SARS allows the averaging method — use Edit payslip to enter a PAYE amount manually.</div>'
     +'<div id="otPreview" class="stat-caption" style="margin-top:10px;"></div>'
+    +'<div style="margin-top:10px;padding:10px;border:1px dashed var(--border);border-radius:8px;"><div class="stat-caption" style="margin-bottom:6px;"><b>Check against SimplePay</b> (optional — not saved): type SimplePay\'s figures for this employee and period.</div>'
+      +'<div class="form-grid"><div class="form-field"><label>SimplePay gross (total income)</label><input type="number" step="0.01" id="cmpGross"></div><div class="form-field"><label>SimplePay net pay</label><input type="number" step="0.01" id="cmpNet"></div></div><div id="otCompare" style="font-size:12.5px;margin-top:6px;"></div></div>'
     +'<div class="helptext" style="margin-top:8px;">Overtime on a public holiday is paid at the overtime multiplier, on top of the holiday hours. BCEA limits: overtime by agreement only, normally no more than 3 hours a day or 10 hours a week; overtime/Sunday/public-holiday rules apply to employees below the BCEA earnings threshold. Premium pay is included in gross pay, so PAYE, UIF and SDL are calculated on it.</div>'
     +'<div class="modal-actions"><button class="btn" id="cancelOvertimeBtn">Cancel</button><button class="btn btn-primary" id="saveOvertimeBtn">Save</button></div>'
   );
@@ -5089,6 +5096,7 @@ function openOvertimeModal(runId, employeeId){
     var out = {
       overtimeHours:numVal('oHours'), overtimeRate:numVal('oRate'),
       sundayRate:numVal('sRate'), publicHolidayRate:numVal('pRate'), commission:numVal('oCommission'),
+      sundayMode:(document.getElementById('sMode')||{}).value||undefined,
       sundayEntries:sundayEntries, holidayEntries:Object.keys(holMap).map(function(k){return holMap[k];})
     };
     var nEl = document.getElementById('oNormal'); if(nEl) out.normalHours = Number(nEl.value)||0;
@@ -5101,9 +5109,22 @@ function openOvertimeModal(runId, employeeId){
     if(!el) return;
     el.innerHTML = (l.commission>0 ? 'Commission '+fmtZAR(l.commission)+' · ' : '')+'Overtime '+l.overtimeHours+'h = '+fmtZAR(l.overtimePay)+' · Sunday '+l.sundayHours+'h = '+fmtZAR(l.sundayPay)+' · Public holiday '+l.publicHolidayHours+'h = '+fmtZAR(l.publicHolidayPay)
       +' → new gross <b>'+fmtZAR(l.gross)+'</b>, net pay <b>'+fmtZAR(l.netPay)+'</b>';
+    var cmp = document.getElementById('otCompare');
+    if(cmp){
+      var cg = document.getElementById('cmpGross'), cn = document.getElementById('cmpNet'), out = [];
+      var one = function(name, mine, el){
+        if(!el || el.value==='') return;
+        var d = Math.round((mine - Number(el.value))*100)/100;
+        out.push(Math.abs(d)<0.01 ? '<span style="color:var(--green);font-weight:700;">'+name+': matches SimplePay ✓</span>'
+          : '<span style="color:var(--red);font-weight:700;">'+name+': Reconi is '+fmtZAR(Math.abs(d))+(d>0?' higher':' lower')+' than SimplePay</span>');
+      };
+      one('Gross', l.gross, cg); one('Net pay', l.netPay, cn);
+      cmp.innerHTML = out.join('<br>');
+    }
   }
   function wirePreview(root){
     root.querySelectorAll('input').forEach(function(el){ el.addEventListener('input', refreshPreview); });
+    root.querySelectorAll('select').forEach(function(el){ el.addEventListener('change', refreshPreview); });
   }
   wirePreview(document.getElementById('modal-root'));
   refreshPreview();
@@ -5231,6 +5252,7 @@ function extraFromLine(line){
   var ex = {};
   if(line.adj) ex.adj = line.adj;
   if(line.commission) ex.commission = line.commission;
+  if(line.sundayMode) ex.sundayMode = line.sundayMode;
   if(line.normalHours) ex.normalHours = line.normalHours;
   var hasSun = (line.sundayEntries||[]).length>0, hasHol = (line.holidayEntries||[]).length>0;
   ex.overtimeHours = hasHol ? (line.weekdayOvertimeHours!=null ? line.weekdayOvertimeHours : 0) : (line.overtimeHours||0);
