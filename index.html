@@ -697,10 +697,11 @@ function calcPayslipLine(emp, company, extra){
   var rebate = REBATE_PRIMARY + (age!==null && age>=65?REBATE_SECONDARY:0) + (age!==null && age>=75?REBATE_TERTIARY:0);
   var medCreditAnnual = medicalCreditMonthly(emp.medicalDependants)*12;
   var taxPayableAnnual = Math.max(0, taxAnnual - rebate - medCreditAnnual);
-  var paye = Math.round(taxPayableAnnual/periodsPerYear);
+  var r2c = function(x){ return Math.round(x*100)/100; };   // PAYE is worked out to the cent (as SimplePay and the SARS PAYE calculators do)
+  var paye = r2c(taxPayableAnnual/periodsPerYear);
   if(bonus>0){
     var withBonusAnnual = Math.max(0, annualTaxOn(taxableAnnual + bonus) - rebate - medCreditAnnual);
-    paye += Math.round(withBonusAnnual - taxPayableAnnual);
+    paye = r2c(paye + (withBonusAnnual - taxPayableAnnual));
   }
   var payeManual = hasAdj('paye');
   if(payeManual) paye = Math.round((Number(adj.paye)||0)*100)/100;
@@ -2003,6 +2004,7 @@ function renderPayrunDetail(runId){
     if(l.overtimeHours) premCaption.push(l.overtimeHours+'h OT');
     if(l.sundayHours) premCaption.push(l.sundayHours+'h Sun');
     if(l.publicHolidayHours) premCaption.push(l.publicHolidayHours+'h PH');
+    if(!(Number(l.gross)>0)) premCaption.push('no pay set on employee — edit the employee, then Recalculate');
     if(l.adj) premCaption.push('edited'+(l.payeManual?', manual PAYE':''));
     return '<tr><td>'+esc(l.employeeName)+(premCaption.length?' <span class="stat-caption">('+premCaption.join(', ')+')</span>':'')+'</td><td>'+fmtZAR(l.gross)+'</td><td>'+fmtZAR(l.paye)+'</td>'
     +'<td>'+fmtZAR(l.uifEmployee)+'</td><td>'+fmtZAR(l.totalDeductions)+'</td><td><b>'+fmtZAR(l.netPay)+'</b></td>'
@@ -5052,10 +5054,12 @@ function openOvertimeModal(runId, employeeId){
     + extraHol.map(function(d){ return holRow(d, '', savedHol[d], true); }).join('');
   openModal(''
     +'<h2>Hours worked — '+esc(emp.firstName+' '+emp.lastName)+'</h2>'
+    +(rate<=0 ? '<div class="pending-box" style="margin-bottom:10px;background:#fdeceb;border-color:#f3cac5;color:#8f2a20;"><b>This employee has no pay set up</b> ('+(isMonthly?'no basic salary':'no hourly rate')+' on their record), so every amount below works out as R0,00. Close this box, open <b>Employees → Edit</b>, enter their pay, then come back and press <b>Recalculate</b> on this pay run.</div>' : '')
     +'<div class="helptext">'+esc(r.periodLabel||'')+' ('+esc(bounds.start)+' to '+esc(bounds.end)+'). Ordinary hourly rate used: <b>'+fmtZAR(rate)+'/hr</b>'
       +(isMonthly?' (monthly pay ÷ '+(Number(emp.standardHours)>0?Number(emp.standardHours):Math.round(45*52/periodsPerYearOf(emp)*100)/100)+' hours in the period)':'')
       +'. Enter the hours for each date; the multipliers are the BCEA defaults and can be changed to match the contract, bargaining council or sectoral determination.</div>'
-    +(isMonthly ? '' : '<div style="'+rowStyle+'">'+lbl('Normal hours')+'<input type="number" min="0" step="0.1" id="oNormal" value="'+esc(line.normalHours||emp.standardHours||'')+'" placeholder="'+esc(emp.standardHours||160)+'"></div>')
+    +(isMonthly ? '' : '<div style="'+rowStyle+'">'+lbl('Normal hours')+'<input type="number" min="0" step="0.1" id="oNormal" value="'+esc(line.normalHours||emp.standardHours||'')+'" placeholder="'+esc(emp.standardHours||160)+'"></div>'
+      +'<div class="helptext" style="margin:-4px 0 8px;">Only the ordinary hours that are <b>not</b> entered below. Sunday, public-holiday and overtime hours are paid <b>in addition</b> at their multiplier. Example: 195 total hours including 20 Sunday hours at 1.5x → enter <b>175</b> here and 20 under the Sunday, with the multiplier 1.5.</div>')
     +'<div style="'+rowStyle+'">'+lbl('Overtime hours (weekdays / Saturdays)')+'<input type="number" min="0" step="0.1" id="oHours" value="'+(weekdayOT?weekdayOT:'')+'" placeholder="0.0"></div>'
     +'<div style="'+rowStyle+'">'+lbl('Overtime multiplier (BCEA default 1.5x)')+'<input type="number" min="0" step="0.05" id="oRate" value="'+(line.overtimeRate||dr.overtime)+'"></div>'
     +head('Sundays in this period')
