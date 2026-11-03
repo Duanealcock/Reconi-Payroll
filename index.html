@@ -426,6 +426,10 @@ tr:last-child td{border-bottom:none;}
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 2h9l4 4v16H6z"/><path d="M9 12h6M9 16h6M9 8h3"/></svg>
         Payslips
       </div>
+      <div class="nav-item" data-route="salarysummary">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 9v12"/></svg>
+        Salary Summary
+      </div>
       <div class="nav-item" data-route="leave">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18"/><path d="m8 14 2 2 4-4"/></svg>
         Leave &amp; Attendance
@@ -1702,6 +1706,7 @@ function render(){
     former: renderFormer,
     payruns: renderPayruns,
     payslips: renderPayslips,
+    salarysummary: renderSalarySummary,
     leave: renderLeave,
     company: renderCompany,
     users: renderUsers,
@@ -2023,6 +2028,132 @@ function renderPayruns(){
   +'<div class="card"><div class="table-wrap"><table><thead><tr><th>Period</th><th>Cycle</th><th>Pay date</th><th>Employees</th><th>Gross</th><th>Net pay</th><th>Status</th><th></th></tr></thead><tbody>'
   +(rows || '<tr><td colspan="8" class="empty-row">No pay runs yet.</td></tr>')
   +'</tbody></table></div></div>';
+}
+
+
+/* ---------- Salary summary report (Payroll → Salary Summary) ---------- */
+var SAL_COLS = [
+  ['Basic','basic'],['Overtime','overtimePay'],['Sunday','sundayPay'],['Public holiday','publicHolidayPay'],['Commission','commission'],['Bonus','bonus'],
+  ['Allowances',function(l){return (l.travelAllowance||0)+(l.otherAllowance||0);}],
+  ['Gross','gross'],['PAYE','paye'],['UIF','uifEmployee'],
+  ['Other deductions',function(l){return (l.retirementDeduction||0)+(l.raDeductionFromPay||0)+(l.medicalAidDeduction||0)+(l.otherDeduction||0);}],
+  ['Net pay','netPay']
+];
+function salColVal(col, l){ var f = col[1]; return typeof f==='function' ? f(l) : (Number(l[f])||0); }
+function salaryRange(){
+  var st = state.salSum || (state.salSum = {});
+  var runs = companyPayruns();
+  if(!st.from || !st.to){
+    var fin = runs.filter(function(r){return r.status==='finalized';});
+    var base = fin[0] || runs[0];
+    var d = base ? base.periodYear+'-'+String(base.periodMonth).padStart(2,'0') : new Date().getFullYear()+'-'+String(new Date().getMonth()+1).padStart(2,'0');
+    st.from = st.from || d; st.to = st.to || d;
+  }
+  if(st.from > st.to){ var t = st.from; st.from = st.to; st.to = t; }
+  if(st.includeDraft===undefined) st.includeDraft = false;
+  return st;
+}
+function salaryRuns(st){
+  var lo = Number(st.from.slice(0,4))*12+Number(st.from.slice(5,7)), hi = Number(st.to.slice(0,4))*12+Number(st.to.slice(5,7));
+  return companyPayruns().filter(function(r){
+    var k = r.periodYear*12+r.periodMonth;
+    return k>=lo && k<=hi && (st.includeDraft || r.status==='finalized');
+  }).sort(function(a,b){ return (a.periodYear-b.periodYear)||(a.periodMonth-b.periodMonth)||((a.periodStart||'')<(b.periodStart||'')?-1:1); });
+}
+function salaryAggregate(runs){
+  var map = {}, order = [];
+  runs.forEach(function(r){
+    r.lines.forEach(function(l){
+      var k = l.employeeId;
+      if(!map[k]){ map[k] = {name:l.employeeName, n:0, vals:SAL_COLS.map(function(){return 0;}), employerCost:0}; order.push(k); }
+      var a = map[k]; a.n++;
+      SAL_COLS.forEach(function(c,i){ a.vals[i] += salColVal(c, l); });
+      a.employerCost += l.employerCost||0;
+    });
+  });
+  var rows = order.map(function(k){ return map[k]; }).sort(function(a,b){ return a.name.localeCompare(b.name); });
+  var tot = SAL_COLS.map(function(c,i){ return rows.reduce(function(s,a){ return s+a.vals[i]; },0); });
+  return {rows:rows, totals:tot, employerCost:rows.reduce(function(s,a){return s+a.employerCost;},0)};
+}
+function salaryTable(rows, totals, firstHead, nameOf){
+  var th = SAL_COLS.map(function(c){ return '<th style="text-align:right;white-space:nowrap;">'+c[0]+'</th>'; }).join('');
+  var body = rows.map(function(a){
+    return '<tr><td style="white-space:nowrap;"><b>'+esc(nameOf(a))+'</b></td>'
+      +a.vals.map(function(v,i){ var strong = SAL_COLS[i][0]==='Gross'||SAL_COLS[i][0]==='Net pay'; return '<td style="text-align:right;white-space:nowrap;'+(strong?'font-weight:700;':'')+'">'+(v? fmtZAR(v) : '<span style="color:var(--text-faint);">–</span>')+'</td>'; }).join('')+'</tr>';
+  }).join('');
+  var foot = '<tr style="background:var(--bg);font-weight:700;"><td>Total</td>'+totals.map(function(v){ return '<td style="text-align:right;white-space:nowrap;">'+fmtZAR(v)+'</td>'; }).join('')+'</tr>';
+  return '<div class="table-wrap"><table style="font-size:12.5px;"><thead><tr><th>'+firstHead+'</th>'+th+'</tr></thead><tbody>'
+    +(body || '<tr><td colspan="'+(SAL_COLS.length+1)+'" class="empty-row">No payslips in this period.</td></tr>')+(rows.length?foot:'')+'</tbody></table></div>';
+}
+function renderSalarySummary(){
+  var c = currentCompany();
+  if(!c) return '<div class="topbar"><h1>Salary Summary</h1></div><div class="card">No company selected.</div>';
+  var st = salaryRange();
+  var runs = salaryRuns(st);
+  var agg = salaryAggregate(runs);
+  var rangeText = st.from===st.to ? monthLabel(Number(st.from.slice(0,4)), Number(st.from.slice(5,7))) : monthLabel(Number(st.from.slice(0,4)), Number(st.from.slice(5,7)))+' to '+monthLabel(Number(st.to.slice(0,4)), Number(st.to.slice(5,7)));
+  var gi = SAL_COLS.map(function(c){return c[0];});
+  var T = function(name){ return agg.totals[gi.indexOf(name)]; };
+  var runRows = runs.map(function(r){
+    return '<tr><td><b>'+esc(r.periodLabel)+'</b></td><td>'+PAY_CYCLES[r.payCycle||'monthly'].label+'</td><td>'+esc(r.payDate||'—')+'</td><td>'+statusPill(r.status)+'</td><td>'+r.lines.length+'</td>'
+      +'<td style="text-align:right;">'+fmtZAR(r.totals.gross)+'</td><td style="text-align:right;">'+fmtZAR(r.totals.paye)+'</td><td style="text-align:right;">'+fmtZAR(r.totals.uifEmployee)+'</td><td style="text-align:right;">'+fmtZAR(r.totals.netPay)+'</td><td style="text-align:right;">'+fmtZAR(r.totals.employerCost)+'</td>'
+      +'<td class="no-print"><span class="link-btn" data-open-run="'+r.id+'">Open</span></td></tr>';
+  }).join('');
+  var runTot = runs.reduce(function(t,r){ t.g+=r.totals.gross; t.p+=r.totals.paye; t.u+=r.totals.uifEmployee; t.n+=r.totals.netPay; t.c+=r.totals.employerCost; return t; },{g:0,p:0,u:0,n:0,c:0});
+  var perRun = runs.map(function(r){
+    var a = salaryAggregate([r]);
+    return '<details class="card" style="margin-top:10px;"><summary style="cursor:pointer;font-weight:700;">'+esc(r.periodLabel)+' <span class="stat-caption" style="font-weight:400;">· '+r.lines.length+' payslip'+(r.lines.length==1?'':'s')+' · gross '+fmtZAR(r.totals.gross)+' · net '+fmtZAR(r.totals.netPay)+' · '+(r.status==='draft'?'draft':'finalized')+'</span></summary>'
+      +'<div style="margin-top:10px;">'+salaryTable(a.rows, a.totals, 'Employee', function(x){return x.name;})+'</div></details>';
+  }).join('');
+  return ''
+  +'<div class="topbar"><div><h1>Salary Summary</h1><div class="subtitle">'+esc(c.name)+' — pay runs and every employee\'s salary breakdown for the period</div></div>'
+    +'<div class="topbar-right"><button class="btn" id="salCsvBtn">Export CSV</button><button class="btn" onclick="window.print()">Print / Save PDF</button></div></div>'
+  +'<div class="card no-print" style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;">'
+    +'<div class="form-field" style="margin:0;"><label>From month</label><input type="month" id="salFrom" value="'+esc(st.from)+'"></div>'
+    +'<div class="form-field" style="margin:0;"><label>To month</label><input type="month" id="salTo" value="'+esc(st.to)+'"></div>'
+    +'<label style="display:flex;gap:6px;align-items:center;font-size:13px;margin-bottom:8px;"><input type="checkbox" id="salDraft"'+(st.includeDraft?' checked':'')+'> Include draft pay runs</label>'
+    +'<span class="link-btn" id="salTaxYear" style="margin-bottom:8px;">This tax year</span>'
+  +'</div>'
+  +'<div class="stat-grid" style="margin-top:14px;">'
+    +statCard('GROSS SALARIES', fmtZAR(T('Gross')), rangeText)
+    +statCard('PAYE', fmtZAR(T('PAYE')), 'Withheld from employees')
+    +statCard('NET PAY', fmtZAR(T('Net pay')), 'Paid to employees')
+    +statCard('EMPLOYER COST', fmtZAR(agg.employerCost), 'Gross + employer UIF & SDL')
+  +'</div>'
+  +'<div class="card" style="margin-top:14px;"><div class="card-title">Pay runs in this period</div><div class="table-wrap"><table><thead><tr><th>Period</th><th>Cycle</th><th>Pay date</th><th>Status</th><th>Staff</th><th style="text-align:right;">Gross</th><th style="text-align:right;">PAYE</th><th style="text-align:right;">UIF</th><th style="text-align:right;">Net pay</th><th style="text-align:right;">Employer cost</th><th class="no-print"></th></tr></thead><tbody>'
+  +(runRows || '<tr><td colspan="11" class="empty-row">No '+(st.includeDraft?'':'finalized ')+'pay runs between these months.</td></tr>')
+  +(runs.length ? '<tr style="background:var(--bg);font-weight:700;"><td colspan="5">Total</td><td style="text-align:right;">'+fmtZAR(runTot.g)+'</td><td style="text-align:right;">'+fmtZAR(runTot.p)+'</td><td style="text-align:right;">'+fmtZAR(runTot.u)+'</td><td style="text-align:right;">'+fmtZAR(runTot.n)+'</td><td style="text-align:right;">'+fmtZAR(runTot.c)+'</td><td class="no-print"></td></tr>' : '')
+  +'</tbody></table></div></div>'
+  +'<div class="card" style="margin-top:14px;"><div class="card-title">Employee salary breakdown — '+esc(rangeText)+'</div><div class="helptext" style="margin:4px 0 10px;">Each employee\'s earnings and deductions added up across the pay runs above (UIF is the employee\'s 1%; employer UIF and SDL are in the employer cost).</div>'
+    +salaryTable(agg.rows, agg.totals, 'Employee', function(x){ return x.name+(x.n>1?' ('+x.n+' runs)':''); })+'</div>'
+  +(runs.length ? '<div style="margin-top:14px;"><div class="card-title" style="margin-bottom:4px;">Breakdown per pay run</div><div class="helptext">Click a pay run to expand each employee\'s figures for that run only.</div>'+perRun+'</div>' : '');
+}
+function exportSalarySummaryCsv(){
+  var st = salaryRange(), runs = salaryRuns(st), agg = salaryAggregate(runs);
+  var q = function(v){ return '"'+String(v).replace(/"/g,'""')+'"'; };
+  var money = function(v){ return (Math.round(v*100)/100).toFixed(2); };
+  var head = ['Employee'].concat(SAL_COLS.map(function(c){return c[0];}));
+  var lines = [];
+  lines.push(['Salary summary', (currentCompany()||{}).name, st.from+' to '+st.to].map(q).join(','));
+  lines.push('');
+  lines.push(['Pay run','Pay date','Status','Staff','Gross','PAYE','UIF','Net pay','Employer cost'].map(q).join(','));
+  runs.forEach(function(r){ lines.push([q(r.periodLabel),q(r.payDate||''),q(r.status),r.lines.length,money(r.totals.gross),money(r.totals.paye),money(r.totals.uifEmployee),money(r.totals.netPay),money(r.totals.employerCost)].join(',')); });
+  lines.push('');
+  lines.push('"Employee breakdown (whole period)"');
+  lines.push(head.map(q).join(','));
+  agg.rows.forEach(function(a){ lines.push([q(a.name)].concat(a.vals.map(money)).join(',')); });
+  lines.push([q('Total')].concat(agg.totals.map(money)).join(','));
+  runs.forEach(function(r){
+    var a = salaryAggregate([r]);
+    lines.push(''); lines.push(q('Pay run: '+r.periodLabel)); lines.push(head.map(q).join(','));
+    a.rows.forEach(function(x){ lines.push([q(x.name)].concat(x.vals.map(money)).join(',')); });
+    lines.push([q('Total')].concat(a.totals.map(money)).join(','));
+  });
+  var csv = lines.join('\n');
+  claude.use('downloads').then(function(d){
+    if(d) d.save({filename:'salary-summary-'+st.from+'-to-'+st.to+'.csv', data: csv}).catch(function(){ fallbackCsv(csv); });
+    else fallbackCsv(csv);
+  }).catch(function(){ fallbackCsv(csv); });
 }
 
 function renderPayrunDetail(runId){
@@ -4280,6 +4411,13 @@ function wireRouteEvents(){
     };
   });
   wireBillingEvents();
+  var sf = document.getElementById('salFrom'), stt = document.getElementById('salTo'), sdr = document.getElementById('salDraft');
+  if(sf) sf.onchange = function(){ if(sf.value){ state.salSum.from = sf.value; render(); } };
+  if(stt) stt.onchange = function(){ if(stt.value){ state.salSum.to = stt.value; render(); } };
+  if(sdr) sdr.onchange = function(){ state.salSum.includeDraft = sdr.checked; render(); };
+  var sty = document.getElementById('salTaxYear');
+  if(sty) sty.onclick = function(){ var n = new Date(), y = n.getMonth()>=2 ? n.getFullYear() : n.getFullYear()-1; state.salSum.from = y+'-03'; state.salSum.to = (y+1)+'-02'; render(); };
+  var scb = document.getElementById('salCsvBtn'); if(scb) scb.onclick = exportSalarySummaryCsv;
   var bm = document.getElementById('billMonth');
   if(bm) bm.onchange = function(){ if(bm.value){ state.billingMonth = bm.value; render(); } };
   var brb = document.getElementById('billRateBtn'); if(brb) brb.onclick = openRateCardModal;
