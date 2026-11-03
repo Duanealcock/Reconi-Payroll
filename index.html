@@ -1,10 +1,3 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body>
 <title>Reconi Payroll</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Pinyon+Script&display=swap');
@@ -641,6 +634,31 @@ function defaultPremiumRates(emp){
   // the normal hours), public-holiday hours worked at the normal rate (1x, public holidays not auto-paid). Monthly-paid: BCEA defaults.
   return hourly ? {overtime:1.5, sunday:1.5, publicHoliday:1} : {overtime:1.5, sunday:2, publicHoliday:1};
 }
+
+/* ---------- Pay modes & recurring pay items (SimplePay-style "You are making changes to Overtime") ----------
+   Each premium line (overtime / Sunday / public holiday) can be paid as: hours x rate x multiplier (default), a fixed Rand amount
+   (optionally repeated for N months or every month), a custom own Rand-per-hour rate, or not paid at all.
+   Repeating fixed amounts are stored per company in payslip_settings._recurring and applied when a payslip is created. */
+var PAY_MODE_KEYS = {overtime:'Overtime', sunday:'Sunday time', publicHoliday:'Public holiday worked'};
+function recurringRulesOf(co){ var r = co && co.payslipSettings && co.payslipSettings._recurring; return Array.isArray(r) ? r : []; }
+function ruleIndexAt(rule, y, m){ return (Number(y)*12+Number(m)) - (Number(rule.startYear)*12+Number(rule.startMonth)); }
+function ruleActiveFor(rule, y, m){ var i = ruleIndexAt(rule, y, m); return i>=0 && (!(Number(rule.months)>0) || i<Number(rule.months)); }
+function ruleDurationText(rule){
+  if(!(Number(rule.months)>0)) return 'every month';
+  var last = (Number(rule.startYear)*12+Number(rule.startMonth)-1) + Number(rule.months)-1;
+  return rule.months+' month'+(rule.months==1?'':'s')+' (to '+monthLabel(Math.floor(last/12), (last%12)+1)+')';
+}
+function recurringExtraFor(emp, company, y, m){
+  var modes = {};
+  recurringRulesOf(company).forEach(function(rule){
+    if(rule.employeeId===emp.id && PAY_MODE_KEYS[rule.key] && ruleActiveFor(rule, y, m)) modes[rule.key] = {mode:'fixed', amount:Number(rule.amount)||0};
+  });
+  return Object.keys(modes).length ? {modes:modes} : undefined;
+}
+async function saveRecurringRules(company, rules){
+  company.payslipSettings = Object.assign({}, company.payslipSettings||{}, {_recurring:rules});
+  return await saveCompany(company);
+}
 function calcPayslipLine(emp, company, extra){
   extra = extra || {};
   var periodsPerYear = periodsPerYearOf(emp);
@@ -679,6 +697,14 @@ function calcPayslipLine(emp, company, extra){
   var sun = prem('sundayHours','sundayRate',dr.sunday);
   if(sundayMode==='included' && sun.hours>0){ sun.pay = Math.round(rate*sun.hours*Math.max(0, sun.rate-1)*100)/100; }
   var ph = prem('publicHolidayHours','publicHolidayRate',dr.publicHoliday);
+  var modesIn = extra.modes || {}, modesOut = {};
+  [['overtime',ot],['sunday',sun],['publicHoliday',ph]].forEach(function(pair){
+    var key = pair[0], p = pair[1], m = modesIn[key];
+    if(!m || !m.mode || m.mode==='hours') return;
+    if(m.mode==='fixed'){ p.pay = Math.round(Math.max(0, Number(m.amount)||0)*100)/100; p.hours = 0; modesOut[key] = {mode:'fixed', amount:p.pay}; }
+    else if(m.mode==='rate'){ var rr = Math.max(0, Number(m.rate)||0); p.pay = p.hours>0 ? Math.round(p.hours*rr*100)/100 : 0; modesOut[key] = {mode:'rate', rate:rr}; }
+    else if(m.mode==='none'){ p.pay = 0; p.hours = 0; modesOut[key] = {mode:'none'}; }
+  });
   var overtimeHours = ot.hours, overtimeRate = ot.rate, overtimePay = ot.pay;
   var sundayHours = sun.hours, sundayRate = sun.rate, sundayPay = sun.pay;
   var publicHolidayHours = ph.hours, publicHolidayRate = ph.rate, publicHolidayPay = ph.pay;
@@ -728,7 +754,7 @@ function calcPayslipLine(emp, company, extra){
     basic: basic, normalHours: normalHours, weekdayOvertimeHours: weekdayOvertimeHours,
     sundayEntries: sundayEntries, holidayEntries: holidayEntries,
     overtimeHours: overtimeHours, overtimeRate: overtimeRate, overtimePay: overtimePay,
-    sundayHours: sundayHours, sundayRate: sundayRate, sundayPay: sundayPay, sundayMode: sundayMode, rv: 2,
+    sundayHours: sundayHours, sundayRate: sundayRate, sundayPay: sundayPay, sundayMode: sundayMode, rv: 2, modes: Object.keys(modesOut).length ? modesOut : null,
     publicHolidayHours: publicHolidayHours, publicHolidayRate: publicHolidayRate, publicHolidayPay: publicHolidayPay,
     hourlyRateUsed: rate,
     travelAllowance: travel, travelTaxablePct: travelPct, taxableEarnings: taxableEarnings, commission: commission, otherAllowance: other, bonus: bonus, bonusNote: bonus>0 ? String(adj.bonusNote||'') : '', gross: gross,
@@ -2187,9 +2213,15 @@ function payslipCardHtml(r, line, emp, c){
   var hide = !!s.hideZeroLines;
   var E = [], D = [];
   E.push({label:hourly?'Basic salary (hourly)':'Basic salary', units: hourly ? (line.normalHours||'') : '', amount:line.basic, always:true});
-  E.push({label:'Overtime @ '+line.overtimeRate+'x', units:line.overtimeHours, amount:line.overtimePay});
-  E.push({label:'Sunday time @ '+line.sundayRate+'x'+(line.sundayMode==='included'?' (extra on normal hours)':''), units:line.sundayHours, amount:line.sundayPay});
-  E.push({label:'Public holiday worked @ '+line.publicHolidayRate+'x', units:line.publicHolidayHours, amount:line.publicHolidayPay});
+  var pmLabel = function(key, base, dflt){
+    var m = line.modes && line.modes[key];
+    if(m && m.mode==='fixed') return base+' (fixed amount)';
+    if(m && m.mode==='rate') return base+' @ '+fmtZAR(m.rate)+'/hr';
+    return dflt;
+  };
+  E.push({label:pmLabel('overtime','Overtime','Overtime @ '+line.overtimeRate+'x'), units:line.overtimeHours, amount:line.overtimePay});
+  E.push({label:pmLabel('sunday','Sunday time','Sunday time @ '+line.sundayRate+'x'+(line.sundayMode==='included'?' (extra on normal hours)':'')), units:line.sundayHours, amount:line.sundayPay});
+  E.push({label:pmLabel('publicHoliday','Public holiday worked','Public holiday worked @ '+line.publicHolidayRate+'x'), units:line.publicHolidayHours, amount:line.publicHolidayPay});
   E.push({label:'Travel allowance', units:'', amount:line.travelAllowance});
   E.push({label:'Other allowance', units:'', amount:line.otherAllowance});
   E.push({label:'Commission', units:'', amount:line.commission||0});
@@ -2326,7 +2358,52 @@ function renderCompany(){
     +'</div>'
     +'<div class="modal-actions"><button class="btn btn-primary" id="saveCompanyBtn">Save company details</button></div>'
   +'</div>'
+  +renderRecurringCard(c)
   +renderPayslipSettingsCard(c);
+}
+function renderRecurringCard(c){
+  var rules = recurringRulesOf(c);
+  var rows = rules.map(function(x){
+    var e = employeeById(x.employeeId);
+    return '<tr><td>'+esc(e ? e.firstName+' '+e.lastName : '(removed employee)')+'</td><td>'+esc(PAY_MODE_KEYS[x.key]||x.key)+'</td><td style="text-align:right;">'+fmtZAR(x.amount)+'</td><td>from '+esc(monthLabel(x.startYear, x.startMonth))+'</td><td>'+esc(ruleDurationText(x))+'</td><td><span class="link-btn" data-stop-rule="'+esc(x.id)+'">Stop</span></td></tr>';
+  }).join('');
+  return '<div class="card" style="max-width:760px;margin-top:14px;"><div class="card-title">Recurring pay items</div>'
+    +'<div class="helptext" style="margin:6px 0 10px;">Fixed Rand amounts for overtime, Sunday time or public-holiday work that repeat for a number of months or every month (like SimplePay). They are added automatically when a pay run or payslip is created, and PAYE, UIF and SDL are worked out on them. You can also set one from <b>Pay Runs → Hours → pay a fixed Rand amount</b>.</div>'
+    +(rows ? '<table class="table"><thead><tr><th>Employee</th><th>Item</th><th style="text-align:right;">Amount</th><th>Starts</th><th>Repeats</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>' : '<div class="empty-row">No recurring pay items.</div>')
+    +'<div class="modal-actions"><button class="btn btn-primary" id="addRecurringBtn">Add recurring pay item</button></div></div>';
+}
+function openRecurringModal(){
+  var c = currentCompany();
+  var emps = state.employees.filter(function(e){ return e.companyId===c.id && e.status!=='inactive'; });
+  if(!emps.length){ alert('Add an employee first.'); return; }
+  var now = new Date();
+  openModal(''
+    +'<h2>Recurring pay item</h2>'
+    +'<div class="form-grid">'
+      +'<div class="form-field"><label>Employee</label><select id="rcEmp">'+emps.map(function(e){ return '<option value="'+esc(e.id)+'">'+esc(e.firstName+' '+e.lastName)+'</option>'; }).join('')+'</select></div>'
+      +'<div class="form-field"><label>Item</label><select id="rcKey">'+Object.keys(PAY_MODE_KEYS).map(function(k){ return '<option value="'+k+'">'+esc(PAY_MODE_KEYS[k])+'</option>'; }).join('')+'</select></div>'
+      +field('Amount per month (R)','rcAmt','', 'number')
+      +'<div class="form-field"><label>Repeat</label><select id="rcRep"><option value="every">Every month</option><option value="months">For a number of months</option></select></div>'
+      +field('Number of months','rcMonths','', 'number')
+      +field('Starting month (first pay run it applies to)','rcStart', now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0'), 'month')
+    +'</div>'
+    +'<div class="helptext">Applies to pay runs and payslips created from the starting month. Existing draft pay runs are not changed — use the Hours screen on a payslip for those.</div>'
+    +'<div class="modal-actions"><button class="btn" id="rcCancel">Cancel</button><button class="btn btn-primary" id="rcSave">Save</button></div>');
+  document.getElementById('rcCancel').onclick = closeModal;
+  document.getElementById('rcSave').onclick = async function(){
+    var amt = numVal('rcAmt'), rp = val('rcRep'), months = Math.floor(numVal('rcMonths'))||0, st = val('rcStart');
+    if(!(amt>0)){ alert('Enter the amount.'); return; }
+    if(rp==='months' && months<1){ alert('Enter the number of months.'); return; }
+    if(!/^\d{4}-\d{2}$/.test(st)){ alert('Choose the starting month.'); return; }
+    var key = val('rcKey'), eid = val('rcEmp');
+    var rules = recurringRulesOf(c).filter(function(x){ return !(x.employeeId===eid && x.key===key); });
+    rules.push({id:uid(), employeeId:eid, key:key, amount:amt, startYear:Number(st.slice(0,4)), startMonth:Number(st.slice(5,7)), months: rp==='months' ? months : 0});
+    var ok = await saveRecurringRules(c, rules);
+    logActivity('company.recurring_add', c.name+' — '+PAY_MODE_KEYS[key]+' '+fmtZAR(amt));
+    closeModal();
+    if(ok===false) alert('Could not save — see the sync message.');
+    render();
+  };
 }
 function field(label,id,val,type){
   return '<div class="form-field"><label>'+label+'</label><input type="'+(type||'text')+'" id="'+id+'" value="'+esc(val==null?'':val)+'"></div>';
@@ -4331,6 +4408,18 @@ function wireRouteEvents(){
     render();
   };
 
+  var addRcBtn = document.getElementById('addRecurringBtn');
+  if(addRcBtn) addRcBtn.onclick = openRecurringModal;
+  document.querySelectorAll('[data-stop-rule]').forEach(function(el){
+    el.onclick = async function(){
+      if(!confirm('Stop this recurring pay item? It will no longer be added to new pay runs (payslips already created are not changed).')) return;
+      var c = currentCompany();
+      await saveRecurringRules(c, recurringRulesOf(c).filter(function(x){ return x.id!==el.dataset.stopRule; }));
+      logActivity('company.recurring_stop', c.name);
+      render();
+    };
+  });
+
   var savePsBtn = document.getElementById('savePayslipSettingsBtn');
   if(savePsBtn) savePsBtn.onclick = async function(){
     var c = currentCompany();
@@ -5056,6 +5145,28 @@ function openOvertimeModal(runId, employeeId){
       +'<div style="'+rowStyle+'">'+lbl('Hours worked')+inp('otHolH', date, saved&&saved.hours)+'</div>'
       +'<div style="'+rowStyle+'">'+lbl('Overtime hours')+inp('otHolO', date, saved&&saved.overtimeHours)+'</div></div>';
   };
+  var modeLines = line.modes || {};
+  var myRules = recurringRulesOf(currentCompany()).filter(function(x){ return x.employeeId===employeeId; });
+  var modeBlock = function(key, what){
+    var m = modeLines[key] || {mode:'hours'};
+    var rule = myRules.filter(function(x){ return x.key===key; })[0];
+    var rep = (m.mode==='fixed' && rule) ? (Number(rule.months)>0 ? 'months' : 'every') : 'once';
+    return '<div class="pmBlock" data-pm-key="'+key+'" style="margin:6px 0 12px;padding:10px;border:1px solid var(--border);border-radius:8px;background:rgba(36,84,168,.04);">'
+      +'<div style="font-size:12.5px;font-weight:700;margin-bottom:6px;">How is '+what+' paid on this payslip?</div>'
+      +'<select class="pmMode" style="width:100%;">'
+        +'<option value="hours"'+(m.mode==='hours'?' selected':'')+'>Pay the hours above × hourly rate × multiplier</option>'
+        +'<option value="fixed"'+(m.mode==='fixed'?' selected':'')+'>Pay a fixed Rand amount</option>'
+        +'<option value="rate"'+(m.mode==='rate'?' selected':'')+'>Custom: pay the hours above at my own Rand per hour</option>'
+        +'<option value="none"'+(m.mode==='none'?' selected':'')+'>Do not pay this anymore</option>'
+      +'</select>'
+      +'<div class="pmFixed" style="margin-top:8px;display:none;"><div style="'+rowStyle+'">'+lbl('Amount (R)')+'<input type="number" min="0" step="0.01" class="pmAmt" value="'+(m.mode==='fixed'&&m.amount?m.amount:'')+'" placeholder="0.00"></div>'
+        +'<div style="'+rowStyle+'">'+lbl('Repeat')+'<select class="pmRep"><option value="once"'+(rep==='once'?' selected':'')+'>This pay run only</option><option value="months"'+(rep==='months'?' selected':'')+'>For a number of months</option><option value="every"'+(rep==='every'?' selected':'')+'>Every month</option></select></div>'
+        +'<div class="pmMonthsRow" style="'+rowStyle+'">'+lbl('Number of months (including this one)')+'<input type="number" min="1" step="1" class="pmMonths" value="'+(rule&&Number(rule.months)>0?rule.months:'')+'" placeholder="e.g. 6"></div>'
+        +'<div class="helptext" style="margin-top:2px;">Repeating amounts are added automatically to future pay runs and can be stopped under <b>Company → Recurring pay items</b>.</div></div>'
+      +'<div class="pmRate" style="margin-top:8px;display:none;"><div style="'+rowStyle+'">'+lbl('Rand per hour (R)')+'<input type="number" min="0" step="0.01" class="pmRateIn" value="'+(m.mode==='rate'&&m.rate?m.rate:'')+'" placeholder="0.00"></div></div>'
+      +'<div class="pmNone helptext" style="margin-top:6px;display:none;">Nothing is paid for this item. Any repeating amount for it is stopped from this pay run onwards.</div>'
+    +'</div>';
+  };
   var holidayRows = days.holidays.map(function(h){ return holRow(h.date, h.name, savedHol[h.date], false); }).join('')
     + extraHol.map(function(d){ return holRow(d, '', savedHol[d], true); }).join('');
   openModal(''
@@ -5068,13 +5179,16 @@ function openOvertimeModal(runId, employeeId){
       +'<div class="helptext" style="margin:-4px 0 8px;">Total ordinary hours worked, <b>including</b> any Sunday hours (SimplePay method: the Sunday hours are then paid only the extra, e.g. 1.5x → an extra 0.5x). Overtime hours are not included here; they are paid in addition. You can change how Sunday hours are paid below.</div>')
     +'<div style="'+rowStyle+'">'+lbl('Overtime hours (weekdays / Saturdays)')+'<input type="number" min="0" step="0.1" id="oHours" value="'+(weekdayOT?weekdayOT:'')+'" placeholder="0.0"></div>'
     +'<div style="'+rowStyle+'">'+lbl('Overtime multiplier (BCEA default 1.5x)')+'<input type="number" min="0" step="0.05" id="oRate" value="'+((line.rv===2&&line.overtimeRate)||dr.overtime)+'"></div>'
+    +modeBlock('overtime','overtime')
     +head('Sundays in this period')
     +sundayRows
     +'<div style="'+rowStyle+'">'+lbl(isMonthly ? 'Sunday multiplier (2x normally, 1.5x if Sundays are ordinary working days)' : 'Sunday multiplier (1.5x = the extra 0.5x is paid on the Sunday hours — same as SimplePay)')+'<input type="number" min="0" step="0.05" id="sRate" value="'+((line.rv===2&&line.sundayRate)||dr.sunday)+'"></div>'
     +(isMonthly ? '' : '<div style="'+rowStyle+'">'+lbl('How Sunday hours are paid')+'<select id="sMode"><option value="included"'+((line.sundayMode||'included')==='included'?' selected':'')+'>Hours are inside the normal hours — pay only the extra (multiplier − 1) — SimplePay method</option><option value="additional"'+(line.sundayMode==='additional'?' selected':'')+'>Hours are on top of the normal hours — pay the full multiplier</option></select></div>')
+    +modeBlock('sunday','Sunday time')
     +holidayRows
     +'<div style="margin-top:10px;"><span class="link-btn" id="otAddDay">+ Add another date (e.g. election day)</span></div>'
     +'<div style="'+rowStyle+'margin-top:12px;">'+lbl('Public holiday multiplier ('+(isMonthly?'1x top-up on top of the monthly salary, which already covers the holiday':'1x = normal rate for hours worked, as SimplePay with public holidays not auto-paid; use 2x if the contract says double pay')+')')+'<input type="number" min="0" step="0.05" id="pRate" value="'+((line.rv===2&&line.publicHolidayRate)||dr.publicHoliday)+'"></div>'
+    +modeBlock('publicHoliday','public holiday work')
     +'<h3 style="margin:16px 0 6px;color:#1f4fa3;font-size:13.5px;">Commission</h3>'
     +'<div style="'+rowStyle+'">'+lbl('Commission for this pay period (R)')+'<input type="number" min="0" step="0.01" id="oCommission" value="'+(line.commission||'')+'" placeholder="0.00"></div>'
     +'<div class="helptext" style="margin-top:4px;">Commission is taxable remuneration: it is added to gross pay, so PAYE (worked out on this period\'s pay), UIF and SDL are calculated on it. For irregular or very large commission, SARS allows the averaging method — use Edit payslip to enter a PAYE amount manually.</div>'
@@ -5102,9 +5216,27 @@ function openOvertimeModal(runId, employeeId){
       sundayEntries:sundayEntries, holidayEntries:Object.keys(holMap).map(function(k){return holMap[k];})
     };
     var nEl = document.getElementById('oNormal'); if(nEl) out.normalHours = Number(nEl.value)||0;
+    var modes = {};
+    document.querySelectorAll('.pmBlock').forEach(function(b){
+      var mode = b.querySelector('.pmMode').value;
+      if(mode==='fixed') modes[b.dataset.pmKey] = {mode:'fixed', amount:Number(b.querySelector('.pmAmt').value)||0};
+      else if(mode==='rate') modes[b.dataset.pmKey] = {mode:'rate', rate:Number(b.querySelector('.pmRateIn').value)||0};
+      else if(mode==='none') modes[b.dataset.pmKey] = {mode:'none'};
+    });
+    if(Object.keys(modes).length) out.modes = modes;
     return out;
   }
+  function syncModeUI(){
+    document.querySelectorAll('.pmBlock').forEach(function(b){
+      var mode = b.querySelector('.pmMode').value, rp = b.querySelector('.pmRep').value;
+      b.querySelector('.pmFixed').style.display = mode==='fixed' ? '' : 'none';
+      b.querySelector('.pmRate').style.display = mode==='rate' ? '' : 'none';
+      b.querySelector('.pmNone').style.display = mode==='none' ? '' : 'none';
+      b.querySelector('.pmMonthsRow').style.display = rp==='months' ? 'grid' : 'none';
+    });
+  }
   function refreshPreview(){
+    syncModeUI();
     var exP = readExtra(); if(line.adj) exP.adj = line.adj;
     var l = calcPayslipLine(emp, currentCompany(), exP);
     var el = document.getElementById('otPreview');
@@ -5153,7 +5285,25 @@ function openOvertimeModal(runId, employeeId){
       t.gross+=l.gross; t.paye+=l.paye; t.uifEmployee+=l.uifEmployee; t.uifEmployer+=l.uifEmployer;
       t.sdlEmployer+=l.sdlEmployer; t.netPay+=l.netPay; t.employerCost+=l.employerCost; return t;
     }, {gross:0,paye:0,uifEmployee:0,uifEmployer:0,sdlEmployer:0,netPay:0,employerCost:0});
+    // repeating fixed amounts / "do not pay anymore" are kept as company-level recurring rules
+    var rules = recurringRulesOf(company).slice(), rulesChanged = false, bad = '';
+    document.querySelectorAll('.pmBlock').forEach(function(b){
+      var key = b.dataset.pmKey, mode = b.querySelector('.pmMode').value, rp = b.querySelector('.pmRep').value;
+      if(mode==='fixed' || mode==='none'){
+        var before = rules.length;
+        rules = rules.filter(function(x){ return !(x.employeeId===employeeId && x.key===key); });
+        if(rules.length!==before) rulesChanged = true;
+      }
+      if(mode==='fixed' && rp!=='once'){
+        var months = rp==='months' ? Math.floor(Number(b.querySelector('.pmMonths').value)||0) : 0;
+        if(rp==='months' && months<1){ bad = 'Enter the number of months for the repeating '+PAY_MODE_KEYS[key]+' amount.'; return; }
+        rules.push({id:uid(), employeeId:employeeId, key:key, amount:Number(b.querySelector('.pmAmt').value)||0, startYear:r.periodYear, startMonth:r.periodMonth, months:months});
+        rulesChanged = true;
+      }
+    });
+    if(bad){ alert(bad); return; }
     var okSave = await savePayrun(r);
+    if(rulesChanged) await saveRecurringRules(company, rules);
     logActivity('payrun.overtime', emp.firstName+' '+emp.lastName+' — OT '+newLine.overtimeHours+'h @ '+newLine.overtimeRate+'x, Sun '+newLine.sundayHours+'h @ '+newLine.sundayRate+'x, PH '+newLine.publicHolidayHours+'h @ '+newLine.publicHolidayRate+'x on '+r.periodLabel);
     closeModal();
     renderCustom();
@@ -5221,7 +5371,7 @@ function openNewRunModal(){
       periodLabel = fmtDateShort(periodStart)+' – '+fmtDateShort(periodEnd)+' ('+PAY_CYCLES[cycleKey].label+')';
     }
 
-    var lines = runEmployees.map(function(emp){ return calcPayslipLine(emp, company); });
+    var lines = runEmployees.map(function(emp){ return calcPayslipLine(emp, company, recurringExtraFor(emp, company, periodYear, periodMonth)); });
     var totals = lines.reduce(function(t,l){
       t.gross+=l.gross; t.paye+=l.paye; t.uifEmployee+=l.uifEmployee; t.uifEmployer+=l.uifEmployer;
       t.sdlEmployer+=l.sdlEmployer; t.netPay+=l.netPay; t.employerCost+=l.employerCost; return t;
@@ -5255,9 +5405,10 @@ function extraFromLine(line){
   if(line.adj) ex.adj = line.adj;
   if(line.commission) ex.commission = line.commission;
   if(line.sundayMode) ex.sundayMode = line.sundayMode;
+  if(line.modes) ex.modes = line.modes;
   if(line.normalHours) ex.normalHours = line.normalHours;
   var hasSun = (line.sundayEntries||[]).length>0, hasHol = (line.holidayEntries||[]).length>0;
-  ex.overtimeHours = hasHol ? (line.weekdayOvertimeHours!=null ? line.weekdayOvertimeHours : 0) : (line.overtimeHours||0);
+  ex.overtimeHours = line.weekdayOvertimeHours!=null ? line.weekdayOvertimeHours : (hasHol ? 0 : (line.overtimeHours||0));
   if(line.rv===2){ ex.overtimeRate = line.overtimeRate; ex.sundayRate = line.sundayRate; ex.publicHolidayRate = line.publicHolidayRate; }
   if(hasSun) ex.sundayEntries = line.sundayEntries; else ex.sundayHours = line.sundayHours||0;
   if(hasHol) ex.holidayEntries = line.holidayEntries; else ex.publicHolidayHours = line.publicHolidayHours||0;
@@ -5303,7 +5454,7 @@ function openAddPayslipModal(runId){
     if(!ids.length){ alert('Select at least one employee.'); return; }
     var company = currentCompany();
     var before = r.lines.slice(), beforeTotals = r.totals;
-    ids.forEach(function(id){ var emp = employeeById(id); if(emp) r.lines.push(calcPayslipLine(emp, company)); });
+    ids.forEach(function(id){ var emp = employeeById(id); if(emp) r.lines.push(calcPayslipLine(emp, company, recurringExtraFor(emp, company, r.periodYear, r.periodMonth))); });
     r.totals = sumRunLines(r.lines);
     var ok = await savePayrun(r);
     if(ok===false){ r.lines = before; r.totals = beforeTotals; closeModal(); renderCustom(); return; }
@@ -5587,4 +5738,3 @@ checkAuthAndBoot();
 
 })();
 </script>
-</body></html>
