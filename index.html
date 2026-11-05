@@ -2415,25 +2415,18 @@ function payslipCardHtml(r, line, emp, c){
   var ytdRows = [['Taxable earnings', ytd.taxable]];
   if(s.showYtdFringe){ ytdRows.push(['Taxable company contributions',0]); ytdRows.push(['Taxable fringe benefits',ytd.fringe]); ytdRows.push(['Provision for tax on annual bonus',0]); }
   ytdRows.push(['Tax paid', ytd.paye]);
-  var lower = '';
-  if(s.showCompanyContributions || s.showYtd){
-    var lc = s.showCompanyContributions ? contrib : [];
-    var rc = s.showYtd ? ytdRows : [];
-    var m = Math.max(lc.length, rc.length, 1);
-    var lrows = '';
-    for(var j=0;j<m;j++){
-      lrows += '<tr>'+(s.showCompanyContributions?cell(lc[j]?esc(lc[j][0]):'','')+cell(lc[j]?psNum(lc[j][1]):'','r'):'')
-        +(s.showYtd?cell(rc[j]?'<b>'+esc(rc[j][0])+'</b>':'','ps-gap')+cell(rc[j]?'<b>'+psNum(rc[j][1])+'</b>':'','r'):'')+'</tr>';
-    }
-    lower = '<table class="ps-t ps-low">'+cg(s.showCompanyContributions && s.showYtd ? [36,14,36,14] : [80,20])+'<tr class="ps-th">'
-      +(s.showCompanyContributions?cell('Company Contributions')+cell('Amount','r'):'')
-      +(s.showYtd?cell('YTD Totals','ps-gap')+cell('Amount','r'):'')+'</tr>'+lrows+'</table>';
-  }
+  var lower = '', ytdBlock = '';
+  var halfTable = function(title, rows, bold){
+    return '<table class="ps-t ps-low" style="width:50%;">'+cg([72,28])+'<tr class="ps-th">'+cell(title)+cell('Amount','r')+'</tr>'
+      +rows.map(function(x){ return '<tr>'+cell(bold?'<b>'+esc(x[0])+'</b>':esc(x[0]),'')+cell(bold?'<b>'+psNum(x[1])+'</b>':psNum(x[1]),'r')+'</tr>'; }).join('')+'</table>';
+  };
+  if(s.showCompanyContributions) lower = halfTable('Company Contributions', contrib.length ? contrib : [['',0]], false);
+  if(s.showYtd) ytdBlock = halfTable('YTD Totals', ytdRows, true);   // year-to-date totals are the last block on the payslip
   var foot = '';
   if(s.showCostToCompany) foot += '<div class="ps-note">Total cost to company: '+psNum(line.employerCost)+'</div>';
   if(s.footerNote) foot += psLines(s.footerNote).map(function(l){ return '<div class="ps-note">'+esc(l)+'</div>'; }).join('');
   if(s.showDisclaimer) foot += '<div class="ps-note">PAYE is calculated by annualising this employee\'s pay based on their '+cyc.label.toLowerCase()+' pay cycle ('+cyc.periodsPerYear+' periods/year), for the 2026/2027 tax year. Please have a registered payroll practitioner or tax professional verify figures before submission to SARS.</div>';
-  return '<div class="ps-doc">'+head+empBlock+main+lower+foot+'</div>';
+  return '<div class="ps-doc">'+head+empBlock+main+lower+foot+ytdBlock+'</div>';
 }
 
 /* ---------- Leave ---------- */
