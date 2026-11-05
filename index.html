@@ -719,12 +719,17 @@ function calcPayslipLine(emp, company, extra){
   var commission = Math.max(0, Number(extra.commission)||0);   // regular remuneration: annualised with the rest of the period's pay
   var travelPct = hasAdj('travelPct') ? Math.min(100, Math.max(0, Number(adj.travelPct)||0)) : TRAVEL_ALLOWANCE_TAXABLE_PCT;
   var gross = basic + premiumPay + travel + other + bonus + commission;
-  var taxableEarnings = gross - travel*(1 - travelPct/100);   // what PAYE is worked out on (before retirement deductions)
-  var annualGross = (gross - bonus)*periodsPerYear;            // remuneration, for the 27.5% retirement cap
+  // Employer-paid benefits: taxable fringe benefits that raise PAYE but are NOT paid out and NOT deducted from the employee's pay.
+  var fringeMed = Math.max(0, hasAdj('fringeMed') ? (Number(adj.fringeMed)||0) : (Number(emp.employerMedicalBenefit)||0));
+  var fringeRet = Math.max(0, hasAdj('fringeRet') ? (Number(adj.fringeRet)||0) : (Number(emp.employerRetirementBenefit)||0));
+  var fringeOth = Math.max(0, hasAdj('fringeOther') ? (Number(adj.fringeOther)||0) : (Number(emp.employerOtherBenefit)||0));
+  var fringe = fringeMed + fringeRet + fringeOth;
+  var taxableEarnings = gross + fringe - travel*(1 - travelPct/100);   // what PAYE is worked out on (before retirement deductions)
+  var annualGross = (gross - bonus + fringe)*periodsPerYear;            // remuneration, for the 27.5% retirement cap
   var retPerPeriod = hasAdj('retirement') ? (Number(adj.retirement)||0) : (Number(emp.retirementContribution)||0);
   var raPerPeriod = hasAdj('ra') ? (Number(adj.ra)||0) : (Number(emp.raContribution)||0);
   var raDeductedFromPay = !!emp.raDeductedFromPay;
-  var combinedRetirementAnnualRaw = (retPerPeriod + raPerPeriod)*periodsPerYear;
+  var combinedRetirementAnnualRaw = (retPerPeriod + raPerPeriod + fringeRet)*periodsPerYear;   // employer-paid retirement benefit is taxed as a fringe benefit and is then deductible
   var retirementCap = Math.min(0.275*annualGross, RETIREMENT_DEDUCTION_ANNUAL_CAP);
   var combinedRetirementAnnual = Math.min(combinedRetirementAnnualRaw, retirementCap);
   var taxableAnnual = Math.max(0, (taxableEarnings - bonus)*periodsPerYear - combinedRetirementAnnual);
@@ -745,13 +750,13 @@ function calcPayslipLine(emp, company, extra){
   var uifBase = Math.min(gross, uifCeilingPerPeriod);
   var uifEmployee = Math.round(uifBase*UIF_RATE*100)/100;
   var uifEmployer = uifEmployee;
-  var sdlEmployer = company && company.sdlApplicable ? Math.round(gross*SDL_RATE*100)/100 : 0;
+  var sdlEmployer = company && company.sdlApplicable ? Math.round((gross+fringe)*SDL_RATE*100)/100 : 0;
   var medicalAidDed = hasAdj('medical') ? (Number(adj.medical)||0) : (Number(emp.medicalAidContribution)||0);
   var otherDed = hasAdj('otherDed') ? (Number(adj.otherDed)||0) : (Number(emp.otherDeduction)||0);
   var raDeductionFromPay = raDeductedFromPay ? raPerPeriod : 0;
   var totalDeductions = paye + uifEmployee + retPerPeriod + raDeductionFromPay + medicalAidDed + otherDed;
   var netPay = gross - totalDeductions;
-  var employerCost = gross + uifEmployer + sdlEmployer;
+  var employerCost = gross + fringe + uifEmployer + sdlEmployer;
   return {
     employeeId: emp.id, employeeName: (emp.firstName+' '+emp.lastName).trim(),
     payCycle: payCycleOf(emp),
@@ -761,7 +766,7 @@ function calcPayslipLine(emp, company, extra){
     sundayHours: sundayHours, sundayRate: sundayRate, sundayPay: sundayPay, sundayMode: sundayMode, rv: 2, modes: Object.keys(modesOut).length ? modesOut : null,
     publicHolidayHours: publicHolidayHours, publicHolidayRate: publicHolidayRate, publicHolidayPay: publicHolidayPay,
     hourlyRateUsed: rate,
-    travelAllowance: travel, travelTaxablePct: travelPct, taxableEarnings: taxableEarnings, commission: commission, otherAllowance: other, bonus: bonus, bonusNote: bonus>0 ? String(adj.bonusNote||'') : '', gross: gross,
+    travelAllowance: travel, travelTaxablePct: travelPct, taxableEarnings: taxableEarnings, fringeMedical: fringeMed, fringeRetirement: fringeRet, fringeOther: fringeOth, fringeBenefits: fringe, commission: commission, otherAllowance: other, bonus: bonus, bonusNote: bonus>0 ? String(adj.bonusNote||'') : '', gross: gross,
     retirementDeduction: retPerPeriod, raContribution: raPerPeriod, raDeductedFromPay: raDeductedFromPay,
     raDeductionFromPay: raDeductionFromPay, retirementTaxDeduction: combinedRetirementAnnual/periodsPerYear,
     medicalAidDeduction: medicalAidDed, otherDeduction: otherDed, otherDeductionNote: otherDed>0 ? String(adj.otherDedNote||'') : '',
@@ -1454,6 +1459,9 @@ var EMPLOYEE_FIELD_MAP = [
   ['annualLeaveDaysPerYear','annual_leave_days_per_year'],['sickLeaveDaysPerYear','sick_leave_days_per_year'],
   ['familyRespDaysPerYear','family_resp_days_per_year']
 ];
+/* Employer-paid benefit columns (employer-benefits.sql). Only sent when the column exists (loaded from the DB) or a value is entered,
+   so employee saves keep working before the SQL has been run. */
+var FRINGE_FIELD_MAP = [['employerMedicalBenefit','employer_medical_benefit'],['employerRetirementBenefit','employer_retirement_benefit'],['employerOtherBenefit','employer_other_benefit']];
 function employeeToRow(e){
   var row = {id:e.id, company_id:e.companyId, termination_reason:e.terminationReason||'', updated_at:new Date().toISOString()};
   EMPLOYEE_FIELD_MAP.forEach(function(pair){
@@ -1463,12 +1471,15 @@ function employeeToRow(e){
   // Postgres rejects '' for date columns (e.g. no date of birth / no termination date) — store those as NULL.
   ['dob','start_date','end_date'].forEach(function(k){ if(row[k]===''||(typeof row[k]==='string' && !row[k].trim())) row[k] = null; });
   if(e.address) row.address = e.address;   // optional column (payslip-layout.sql)
+  FRINGE_FIELD_MAP.forEach(function(pair){ var v = Number(e[pair[0]])||0; if(v!==0 || e._fringeCols) row[pair[1]] = v; });
   return row;
 }
 function employeeFromRow(r){
   var e = {id:r.id, companyId:r.company_id, terminationReason:r.termination_reason||''};
   EMPLOYEE_FIELD_MAP.forEach(function(pair){ e[pair[0]] = r[pair[1]]; });
   e.address = r.address || '';
+  FRINGE_FIELD_MAP.forEach(function(pair){ e[pair[0]] = Number(r[pair[1]])||0; });
+  e._fringeCols = ('employer_medical_benefit' in r);
   return e;
 }
 
@@ -2118,7 +2129,7 @@ function renderSalarySummary(){
     +statCard('GROSS SALARIES', fmtZAR(T('Gross')), rangeText)
     +statCard('PAYE', fmtZAR(T('PAYE')), 'Withheld from employees')
     +statCard('NET PAY', fmtZAR(T('Net pay')), 'Paid to employees')
-    +statCard('EMPLOYER COST', fmtZAR(agg.employerCost), 'Gross + employer UIF & SDL')
+    +statCard('EMPLOYER COST', fmtZAR(agg.employerCost), 'Gross + employer UIF, SDL & benefits')
   +'</div>'
   +'<div class="card" style="margin-top:14px;"><div class="card-title">Pay runs in this period</div><div class="table-wrap"><table><thead><tr><th>Period</th><th>Cycle</th><th>Pay date</th><th>Status</th><th>Staff</th><th style="text-align:right;">Gross</th><th style="text-align:right;">PAYE</th><th style="text-align:right;">UIF</th><th style="text-align:right;">Net pay</th><th style="text-align:right;">Employer cost</th><th class="no-print"></th></tr></thead><tbody>'
   +(runRows || '<tr><td colspan="11" class="empty-row">No '+(st.includeDraft?'':'finalized ')+'pay runs between these months.</td></tr>')
@@ -2291,7 +2302,7 @@ function ytdForEmployee(r, employeeId){
   var end = periodBoundsOfRun(r).end;
   var y = Number(end.slice(0,4)), m = Number(end.slice(5,7));
   var start = (m>=3 ? y : y-1)+'-03-01';
-  var out = {taxable:0, paye:0};
+  var out = {taxable:0, paye:0, fringe:0};
   state.payruns.forEach(function(x){
     if(x.companyId!==r.companyId) return;
     if(x.id!==r.id && x.status!=='finalized') return;
@@ -2299,7 +2310,7 @@ function ytdForEmployee(r, employeeId){
     if(b.end < start || b.end > end) return;
     (x.lines||[]).forEach(function(l){
       if(l.employeeId!==employeeId) return;
-      out.taxable += (l.taxableEarnings!=null ? Number(l.taxableEarnings) : Number(l.gross))||0; out.paye += Number(l.paye)||0;
+      out.taxable += (l.taxableEarnings!=null ? Number(l.taxableEarnings) : Number(l.gross))||0; out.paye += Number(l.paye)||0; out.fringe += Number(l.fringeBenefits)||0;
     });
   });
   return out;
@@ -2388,9 +2399,12 @@ function payslipCardHtml(r, line, emp, c){
   var contrib = [];
   if(line.uifEmployer>0 || !hide) contrib.push(['Unemployment insurance fund', line.uifEmployer]);
   if(line.sdlEmployer>0) contrib.push(['Skills development levy', line.sdlEmployer]);
+  if(line.fringeMedical>0) contrib.push(['Medical aid (paid by employer)', line.fringeMedical]);
+  if(line.fringeRetirement>0) contrib.push(['Retirement fund (paid by employer)', line.fringeRetirement]);
+  if(line.fringeOther>0) contrib.push(['Other benefits (paid by employer)', line.fringeOther]);
   var ytd = ytdForEmployee(r, emp.id);
   var ytdRows = [['Taxable earnings', ytd.taxable]];
-  if(s.showYtdFringe){ ytdRows.push(['Taxable company contributions',0]); ytdRows.push(['Taxable fringe benefits',0]); ytdRows.push(['Provision for tax on annual bonus',0]); }
+  if(s.showYtdFringe){ ytdRows.push(['Taxable company contributions',0]); ytdRows.push(['Taxable fringe benefits',ytd.fringe]); ytdRows.push(['Provision for tax on annual bonus',0]); }
   ytdRows.push(['Tax paid', ytd.paye]);
   var lower = '';
   if(s.showCompanyContributions || s.showYtd){
@@ -3721,6 +3735,7 @@ function easyCollect(cache){
         a.ret += l.retirementDeduction||0;
         a.ra += l.raDeductionFromPay != null ? (l.raDeductionFromPay||0) : (l.raDeductedFromPay ? (l.raContribution||0) : 0);
         a.med += l.medicalAidDeduction||0;
+        a.fMed = (a.fMed||0) + (l.fringeMedical||0); a.fRet = (a.fRet||0) + (l.fringeRetirement||0); a.fOth = (a.fOth||0) + (l.fringeOther||0);
         a.paye += l.paye||0;
         a.uif += (l.uifEmployee||0)+(l.uifEmployer||0);
         a.sdl += l.sdlEmployer||0;
@@ -3853,10 +3868,11 @@ function easyBuild(ctx){
 
     /* amounts: whole rand for income/deduction codes, cents for tax codes */
     var inc = {
-      '3601': Math.round(a.basic), '3605': Math.round(a.bonus||0), '3606': Math.round(a.comm||0), '3607': Math.round(a.ot), '3701': Math.round(a.travel), '3713': Math.round(a.other)
+      '3601': Math.round(a.basic), '3605': Math.round(a.bonus||0), '3606': Math.round(a.comm||0), '3607': Math.round(a.ot), '3701': Math.round(a.travel), '3713': Math.round(a.other),
+      '3810': Math.round(a.fMed||0), '3801': Math.round((a.fOth||0)+(a.fRet||0))   // taxable fringe benefits: employer medical aid / other (incl. employer retirement)
     };
     var income = 0; Object.keys(inc).forEach(function(k){ income += inc[k]; });
-    var ded = { '4001': Math.round(a.ret), '4006': Math.round(a.ra), '4005': Math.round(a.med) };
+    var ded = { '4001': Math.round(a.ret+(a.fRet||0)), '4006': Math.round(a.ra), '4005': Math.round(a.med+(a.fMed||0)) };
     var deductions = 0; Object.keys(ded).forEach(function(k){ deductions += ded[k]; });
     var uif = Math.round(a.uif*100)/100, sdl = Math.round(a.sdl*100)/100;
     var credit = Math.round(a.credit*100)/100;
@@ -3886,7 +3902,7 @@ function easyBuild(ctx){
       rec.push(['3240','2'], ['3241', easyQ(easyDigits(emp.accountNumber))], ['3242', easyDigits(emp.branchCode)], ['3245', easyQ(surname)], ['3246', /sav/i.test(emp.accountType||'') ? '2' : '1']);
     } else rec.push(['3240','0']);
     rec.push(['3288', easyQ('1')], ['3026', easyQ('N')]);
-    ['3601','3605','3606','3607','3701','3713'].forEach(function(k){ if(inc[k]>0) rec.push([k, String(inc[k])]); });
+    ['3601','3605','3606','3607','3701','3713','3801','3810'].forEach(function(k){ if(inc[k]>0) rec.push([k, String(inc[k])]); });
     rec.push(['3699', String(income)]);
     ['4001','4006','4005'].forEach(function(k){ if(ded[k]>0) rec.push([k, String(ded[k])]); });
     if(deductions>0) rec.push(['4497', String(deductions)]);
@@ -4047,7 +4063,7 @@ function easyCardHtml(ctx){
       +'<input type="file" id="easyCheckInput" accept=".txt,text/plain" style="display:none">'
       +(ok?'':' <span class="link-btn" id="easyForceBtn">Export anyway (for review only)</span>')
     +'</div>'
-    +'<div class="helptext" style="margin-top:10px;">Field mapping used: income 3601 basic pay · 3605 bonus / one-off earnings · 3606 commission · 3607 overtime / Sunday / public-holiday pay · 3701 travel allowance · 3713 other allowances · 3699 total; deductions 4001 retirement fund · 4006 RA deducted from pay · 4005 medical aid · 4497 total; 4102 PAYE · 4116 medical credit · 4141 UIF (employee + employer) · 4142 SDL · 4149 total. Code meanings were inferred from a working Sage export and common SARS usage — compare with the current SARS e@syFile specification and import a TEST file first.</div>'
+    +'<div class="helptext" style="margin-top:10px;">Field mapping used: income 3601 basic pay · 3605 bonus / one-off earnings · 3606 commission · 3607 overtime / Sunday / public-holiday pay · 3701 travel allowance · 3713 other allowances · 3801 other taxable fringe benefits (employer-paid) · 3810 employer-paid medical aid · 3699 total; deductions 4001 retirement fund · 4006 RA deducted from pay · 4005 medical aid · 4497 total; 4102 PAYE · 4116 medical credit · 4141 UIF (employee + employer) · 4142 SDL · 4149 total. Code meanings were inferred from a working Sage export and common SARS usage — compare with the current SARS e@syFile specification and import a TEST file first.</div>'
   +'</div>';
 }
 function downloadEasyFile(force){
@@ -4846,6 +4862,13 @@ function openEmployeeModal(id){
       +field('Medical aid dependants (incl. main member, 0 = none)','fMedDep',e.medicalDependants||0,'number')
       +field('Other deduction per period (R)','fOtherDed',e.otherDeduction,'number')
     +'</div>'
+    +'<div class="section-title">Employer-paid benefits (taxable, not deducted from pay)</div>'
+    +'<div class="form-grid">'
+      +field('Medical aid paid by the employer (per period R)','fFMed',e.employerMedicalBenefit,'number')
+      +field('Retirement fund / RA paid by the employer (per period R)','fFRet',e.employerRetirementBenefit,'number')
+      +field('Other benefits paid by the employer, e.g. income protection (per period R)','fFOth',e.employerOtherBenefit,'number')
+    +'</div>'
+    +'<div class="helptext">Amounts the company pays on the employee\'s behalf (the "Benefits" on a SimplePay payslip). They are <b>not</b> deducted from the employee\'s pay and not paid to them, but SARS treats them as taxable fringe benefits, so PAYE is higher. Employer retirement contributions are then deducted again as a retirement deduction (up to the limit). Do not also enter these amounts as deductions above.</div>'
     +'<div class="helptext">Pension/provident and RA contributions share one combined tax-deduction limit: the lesser of 27.5% of annual remuneration or '+fmtZAR(RETIREMENT_DEDUCTION_ANNUAL_CAP)+' per year (Section 11F).</div>'
     +'<div class="section-title">Banking</div>'
     +'<div class="form-grid">'
@@ -4873,6 +4896,7 @@ function openEmployeeModal(id){
     e.retirementContribution = numVal('fRet'); e.raContribution = numVal('fRa');
     e.raDeductedFromPay = val('fRaDeducted') === 'true'; e.medicalAidContribution = numVal('fMed');
     e.medicalDependants = numVal('fMedDep'); e.otherDeduction = numVal('fOtherDed');
+    e.employerMedicalBenefit = numVal('fFMed'); e.employerRetirementBenefit = numVal('fFRet'); e.employerOtherBenefit = numVal('fFOth');
     e.bankName = val('fBank'); e.accountNumber = val('fAcc'); e.branchCode = val('fBranch'); e.accountType = val('fAccType');
     e.annualLeaveDaysPerYear = val('fAnnLeave')===''?null:numVal('fAnnLeave');
     e.sickLeaveDaysPerYear = val('fSickLeave')===''?null:numVal('fSickLeave');
@@ -5661,6 +5685,11 @@ function openEditPayslipModal(runId, employeeId){
       +num('epOtherDed','Other deduction',line.otherDeduction)
       +'<div class="form-field"><label>Other deduction description</label><input type="text" id="epOtherDedNote" value="'+esc(line.otherDeductionNote||'')+'" placeholder="e.g. Staff loan"></div>'
     +'</div>'
+    +'<h3 style="margin:12px 0 6px;">Employer-paid benefits <span class="stat-caption" style="font-weight:400;">(taxable, not deducted from pay)</span></h3><div class="form-grid">'
+      +num('epFMed','Medical aid paid by employer',line.fringeMedical||0)
+      +num('epFRet','Retirement fund / RA paid by employer',line.fringeRetirement||0)
+      +num('epFOth','Other benefits paid by employer',line.fringeOther||0)
+    +'</div>'
     +'<h3 style="margin:12px 0 6px;">PAYE</h3><div class="form-grid">'
       +'<div class="form-field"><label>Travel allowance taxable portion</label><select id="epTravelPct">'
         +[80,20,100].map(function(p){ return '<option value="'+p+'"'+((line.travelTaxablePct!=null?line.travelTaxablePct:80)===p?' selected':'')+'>'+p+'%'+(p===80?' (standard)':(p===20?' (≥80% business travel)':' (fully taxable)'))+'</option>'; }).join('')
@@ -5683,6 +5712,9 @@ function openEditPayslipModal(runId, employeeId){
     diff('ra', n('epRa'), base.raContribution);
     diff('medical', n('epMed'), base.medicalAidDeduction);
     diff('otherDed', n('epOtherDed'), base.otherDeduction);
+    diff('fringeMed', n('epFMed'), base.fringeMedical);
+    diff('fringeRet', n('epFRet'), base.fringeRetirement);
+    diff('fringeOther', n('epFOth'), base.fringeOther);
     if(n('epBonus')>0){ a.bonus = Math.round(n('epBonus')*100)/100; if(g('epBonusNote').trim()) a.bonusNote = g('epBonusNote').trim(); }
     if(n('epOtherDed')>0 && g('epOtherDedNote').trim()) a.otherDedNote = g('epOtherDedNote').trim();
     if(Number(g('epTravelPct'))!==TRAVEL_ALLOWANCE_TAXABLE_PCT) a.travelPct = Number(g('epTravelPct'));
