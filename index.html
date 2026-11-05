@@ -195,7 +195,12 @@ button{font-family:inherit;}
 .ps-head{margin-bottom:12px;}
 .ps-emp{margin-bottom:22px;}
 .ps-main,.ps-low{margin-bottom:22px;}
-.ps-main .ps-gap,.ps-low .ps-gap{border-left:2px solid #fff;padding-left:6px;}
+.ps-main .ps-gap,.ps-low .ps-gap{border-left:2px solid #fff;padding-left:4px;}
+/* every block is split exactly 50 / 50 so the right-hand column (Deductions, YTD, employee details) starts on the page centre line */
+.ps-main,.ps-low,.ps-emp,.ps-head{table-layout:fixed;}
+.ps-emp>tbody>tr>td,.ps-head>tbody>tr>td{padding:0;width:50%;}
+.ps-emp>tbody>tr>td:last-child,.ps-head>tbody>tr>td:last-child{padding-left:2px;}
+.ps-head>tbody>tr>td:first-child{padding-left:4px;}
 .ps-th td{font-weight:700;border-top:2px solid #6b6b6b;border-bottom:2px solid #6b6b6b;padding:8px 4px;}
 .ps-tot td{font-weight:700;background:#d4d4d4;border-top:3px solid #fff;}
 .ps-net{font-weight:700;background:#bdbdbd;border-top:3px solid #fff;}
@@ -2328,7 +2333,7 @@ function payslipCardHtml(r, line, emp, c){
     var refs = []; if(c.payeRef) refs.push('PAYE ref: '+c.payeRef); if(c.uifRef) refs.push('UIF ref: '+c.uifRef); if(c.sdlRef) refs.push('SDL ref: '+c.sdlRef);
     if(refs.length) compLines.push(refs.join(' · '));
   }
-  var head = '<table class="ps-t ps-head"><tr><td style="width:55%"><div class="ps-co">'+esc(c.name)+'</div>'
+  var head = '<table class="ps-t ps-head"><tr><td><div class="ps-co">'+esc(c.name)+'</div>'
     +compLines.map(function(l){ return '<div>'+esc(l)+'</div>'; }).join('')
     +(s.headerNote?psLines(s.headerNote).map(function(l){return '<div>'+esc(l)+'</div>';}).join(''):'')+'</td>'
     +'<td>'+(s.showPayDate?'<table class="ps-t"><tr><td class="ps-lbl" style="width:38%">Pay Date</td><td>'+esc(psDate(r.payDate))+'</td></tr>'
@@ -2351,7 +2356,7 @@ function payslipCardHtml(r, line, emp, c){
       return '<tr><td class="ps-lbl" style="width:34%">'+esc(x[0])+'</td><td>'+v+'</td></tr>';
     }).join('')+'</table>';
   };
-  var empBlock = '<table class="ps-t ps-emp"><tr><td style="width:55%">'+kv(left)+'</td><td>'+kv(right)+'</td></tr></table>';
+  var empBlock = '<table class="ps-t ps-emp"><tr><td>'+kv(left)+'</td><td>'+kv(right)+'</td></tr></table>';
   // ----- earnings / deductions
   var hide = !!s.hideZeroLines;
   var E = [], D = [];
@@ -2395,7 +2400,9 @@ function payslipCardHtml(r, line, emp, c){
   var headRow = '<tr class="ps-th">'+cell('Earnings')+(uc?cell('Units','r'):'')+cell('Amount','r')+cell('Deductions','ps-gap')+(oc?cell('Opening balance','r'):'')+cell('Amount','r')+'</tr>';
   var totRow = '<tr class="ps-tot"><td>Total earnings</td>'+(uc?'<td></td>':'')+'<td class="r">'+psNum(line.gross)+'</td><td class="ps-gap">Total deductions</td>'+(oc?'<td></td>':'')+'<td class="r">'+psNum(line.totalDeductions)+'</td></tr>';
   var netRow = '<tr><td colspan="'+(span+1)+'" style="border:0"></td><td class="ps-net ps-gap">Nett pay</td>'+(oc?'<td class="ps-net"></td>':'')+'<td class="ps-net r">'+psNum(line.netPay)+'</td></tr>';
-  var main = '<table class="ps-t ps-main">'+headRow+rows+totRow+netRow+'</table>';
+  var cg = function(a){ return '<colgroup>'+a.map(function(w){ return '<col style="width:'+w+'%">'; }).join('')+'</colgroup>'; };
+  var mainCols = (uc ? [28,8,14] : [36,14]).concat(oc ? [26,10,14] : [36,14]);
+  var main = '<table class="ps-t ps-main">'+cg(mainCols)+headRow+rows+totRow+netRow+'</table>';
   // ----- lower section
   var contrib = [];
   if(line.uifEmployer>0 || !hide) contrib.push(['Unemployment insurance fund', line.uifEmployer]);
@@ -2418,7 +2425,7 @@ function payslipCardHtml(r, line, emp, c){
       lrows += '<tr>'+(s.showCompanyContributions?cell(lc[j]?esc(lc[j][0]):'','')+cell(lc[j]?psNum(lc[j][1]):'','r'):'')
         +(s.showYtd?cell(rc[j]?'<b>'+esc(rc[j][0])+'</b>':'','ps-gap')+cell(rc[j]?'<b>'+psNum(rc[j][1])+'</b>':'','r'):'')+'</tr>';
     }
-    lower = '<table class="ps-t ps-low"><tr class="ps-th">'
+    lower = '<table class="ps-t ps-low">'+cg(s.showCompanyContributions && s.showYtd ? [36,14,36,14] : [80,20])+'<tr class="ps-th">'
       +(s.showCompanyContributions?cell('Company Contributions')+cell('Amount','r'):'')
       +(s.showYtd?cell('YTD Totals','ps-gap')+cell('Amount','r'):'')+'</tr>'+lrows+'</table>';
   }
